@@ -19,7 +19,7 @@ python asegrm.py compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TR
 
 - --leaf_ids: Path to the file of the IDs of the leaves on the trees. No header, one ID per line. Ensure the order of the IDs is the same as the leaves'. For some ARG-reconstruction software packages like [Relate](https://myersgroup.github.io/relate/index.html), [SINGER](https://github.com/popgenmethods/SINGER), [tsinfer-tsdate](https://github.com/tskit-dev/tsdate?tab=readme-ov-file), the order of the leaves on the output trees is the same as the order of the samples in the input VCF file. For these packages, you can read the sample IDs from the VCF, keep the same order, and append .0 and .1 to each sample ID (because each leaf represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry. 
 
-- --local_ancetry: Local ancestry calls of the same chr as the tree sequence. Currently support the .msp.tsv file from [RFMix](https://github.com/slowkoni/rfmix) and the .vcf.gz file from [flare](https://github.com/browning-lab/flare). When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome as long as it covers the tree sequence region.
+- --local_ancetry: Local ancestry calls of the same chr as the tree sequence. Currently support the .msp.tsv format from [RFMix](https://github.com/slowkoni/rfmix) and the .vcf.gz format from [flare](https://github.com/browning-lab/flare). When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome as long as it covers the tree sequence region.
 
 - --target_ancestry: Population name of the ancestry being targeted for investigation. All the leaves with other ancestries in the trees are masked when constructing ancestry-specific GRM. Ensure the name is included in the file indexed by the --local_ancestry.
 
@@ -28,6 +28,12 @@ python asegrm.py compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TR
 - --output_path: Path to output directory
 
 #### Optional arguments
+
+- --gp: The function up-weighting recent branches. Currently provide two options: gp1 and gp2. Compared to gp1, gp2 up-weights recent branches more heavily, potentially being able to reveal more recent/finer structures.
+
+- --rlim and --alim: Most recent time limit and most ancient time limit. Unit: generations. The two parameters are used to define a time window, only the part within the window of the trees is used when asegrm is constructing the GRM, potentially being able to reveal the structures that happened in the time window. See the section *Time-specific eGRM reveals dynamic relatedness through history* in [Fan et al., 2022](https://www.cell.com/ajhg/fulltext/S0002-9297(22)00112-4) for more info.
+
+- --left and --right: Leftmost genomic position and rightmost genomic position. Unit: bp. The two parameters are used to define a genomic interval, only the part within the interval of the trees is used when asegrm is constructing the GRM.
 
 #### Output
 Under the output directory, the files with the suffixs below are generated.
@@ -49,7 +55,7 @@ python asegrm.py merge [-h] output_path
 - output_path: The path indexed by the --output_path when running the *compute* step. 
 
 #### Output
-Under the directory indexed by the --output_path, the following files are generated.
+The following files are generated under the directory indexed by the --output_path.
 
 - merged.target_ancestry.asegrm.diploid.npy: The ancestry-specific GRM with diploid mode 
 
