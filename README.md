@@ -43,10 +43,10 @@ Under the output directory, the files with the suffixs below are generated.
 
 ### Running *merge* step
 ~~~
-python asegrm.py merge [-h] --output_path OUTPUT_PATH
+python asegrm.py merge [-h] output_path
 ~~~
 #### Required arguments
-- --output_path: The path indexed by the --output_path when running the *compute* step. 
+- output_path: The path indexed by the --output_path when running the *compute* step. 
 
 #### Output
 Under the directory indexed by the --output_path, the following files are generated.
