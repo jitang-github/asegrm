@@ -15,22 +15,26 @@ python asegrm.py compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TR
                          [--rlim RLIM] [--alim ALIM] [--verbose] [--output-format {gcta,numpy}]
 ~~~
 #### Required arguments
-**--trees:** Path to ts-kit tree sequence file of one chr/chunk
+- --trees: Path to ts-kit tree sequence file of one chr/chunk
 
-**--tree_samples:** Sample IDs of the leaves on the trees. Ensure the order of the IDs is the same as the leaves'. For some ARG-reconstruction software packages like [Relate](https://myersgroup.github.io/relate/index.html), [SINGER](https://github.com/popgenmethods/SINGER), [tsinfer-tsdate](https://github.com/tskit-dev/tsdate?tab=readme-ov-file), the order of the leaves on the output trees is the same as the order of the samples in the input VCF file. For these packages, you can read the sample IDs from the VCF, keep the same order, and append .0 and .1 to each sample ID (because each leaf represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry. 
+- --tree_samples: Sample IDs of the leaves on the trees. Ensure the order of the IDs is the same as the leaves'. For some ARG-reconstruction software packages like [Relate](https://myersgroup.github.io/relate/index.html), [SINGER](https://github.com/popgenmethods/SINGER), [tsinfer-tsdate](https://github.com/tskit-dev/tsdate?tab=readme-ov-file), the order of the leaves on the output trees is the same as the order of the samples in the input VCF file. For these packages, you can read the sample IDs from the VCF, keep the same order, and append .0 and .1 to each sample ID (because each leaf represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry. 
 
-**--local_ancetry:** Local ancestry calls of the same chr as the tree sequence. Currently support the .msp.tsv file from [RFMix](https://github.com/slowkoni/rfmix) and the .vcf.gz file from [flare](https://github.com/browning-lab/flare). When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome as long as it covers the tree sequence region.
+- --local_ancetry: Local ancestry calls of the same chr as the tree sequence. Currently support the .msp.tsv file from [RFMix](https://github.com/slowkoni/rfmix) and the .vcf.gz file from [flare](https://github.com/browning-lab/flare). When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome as long as it covers the tree sequence region.
 
-**--target_ancestry:** Population name of the ancestry being targeted for investigation. All other ancestries are masked when as-egrm is running. The name should be included in the file indexed by the --local_ancestry.
+- --target_ancestry: Population name of the ancestry being targeted for investigation. All other ancestries are masked when as-egrm is running. The name should be included in the file indexed by the --local_ancestry.
 
-**--genetic_map:** Path to the genetic map file, which is a (comma/space/tab separated) three-column file with the first column specifying the physical position in bp and the third column specifying the genetic position in cM. The first line will always be ignored as the header.
+- --genetic_map: Path to the genetic map file, which is a (comma/space/tab separated) three-column file with the first column specifying the physical position in bp and the third column specifying the genetic position in cM. The first line will always be ignored as the header.
 
-**--output_path:** Path to output directory
+- --output_path: Path to output directory
 
 #### Optional arguments
 
 #### Output
+Under the output directory, the files with the suffixs below are generated.
 
+- .trees.lac.npy: Ancestry info for the leaves in the trees. This file just needs to be generated once when running asegrm multiple times, each with a different target ancestry.
+
+- .trees.lac.skipped_trees: The trees with leaves spanning more than one ancestry are skipped when generating the .trees.lac.npy file and have no contribution to constructing ancestry-specific GRM. This file records the proportion of these trees. 
 
 
 ### Running *merge* step
@@ -38,13 +42,13 @@ python asegrm.py compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TR
 python asegrm.py merge [-h] --output_path OUTPUT_PATH
 ~~~
 #### Required arguments
-**--output_path:** The path indexed by the --output_path when running the *compute* step. 
+- --output_path: The path indexed by the --output_path when running the *compute* step. 
 
 #### Output
 The output with haploid and diploid modes are saved to output_path/merged_haploid.npy and output_path/merged_diploid.npy, respectively.
 
 ### Example
-
+Check ./example/example.py for an example
 
 ## Support
 Any issues please contact Ji Tang (jitang@usc.edu)
