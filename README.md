@@ -7,7 +7,7 @@ Firstly execute the following commands to use [conda](https://docs.conda.io/en/l
 conda create --name asegrm python==3.9.18 numpy==1.26.2
 conda activate asegrm
 ~~~~
-Then go into the asegrm folder and perform the following command to install the package dependencies
+Then go into the asegrm folder and execute the following command to install asegrm and the dependencies
 ~~~~
 pip install .
 ~~~~
@@ -18,7 +18,7 @@ To enable running parallel jobs under diverse computation environments, the runn
 
 ### Running *compute* step
 ~~~
-python asegrm.py compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TREES --treeSamples TREESAMPLES --local_ancetry LOCAL_ANCETRY
+asegrm compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TREES --treeSamples TREESAMPLES --local_ancetry LOCAL_ANCETRY
                          --target-ancestry TARGET_ANCESTRY --genetic-map GENETIC_MAP [--gp GP] [--left LEFT] [--right RIGHT]
                          [--rlim RLIM] [--alim ALIM] [--verbose] [--output-format {gcta,numpy}]
 ~~~
@@ -57,7 +57,7 @@ Under the output directory, the files with the suffixs below are generated.
 
 ### Running *merge* step
 ~~~
-python asegrm.py merge [-h] output_path
+asegrm merge [-h] output_path
 ~~~
 #### Required arguments
 - output_path: The path indexed by the --output_path when running the *compute* step. 
