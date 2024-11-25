@@ -2,7 +2,15 @@
 as-eGRM is a genealogy-based method to estimate the expected genetic relationship matrix within one ancestry in admixed populations.
 
 ## Installation
-(to be finished)
+Firstly execute the following commands to use [conda](https://docs.conda.io/en/latest/) to create an environment for running asegrm
+~~~~
+conda create --name asegrm python==3.9.18 numpy==1.26.2
+conda activate asegrm
+~~~~
+Then go into the asegrm folder and perform the following command to install the package dependencies
+~~~~
+pip install .
+~~~~
 
 ## Usage
 To enable running parallel jobs under diverse computation environments, the running is split into two steps:
