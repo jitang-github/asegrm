@@ -61,6 +61,8 @@ The following files are generated under the directory indexed by the --output_pa
 
 - merged.target_ancestry.asegrm.haploid.npy: The ancestry-specific GRM with haploid mode
 
+- merged.target_ancestry.asegrm.log: Log file
+
 ### Example
 Check ./example/example.py for an example
 
