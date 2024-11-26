@@ -4,7 +4,7 @@ as-eGRM is a genealogy-based method to estimate the expected genetic relationshi
 ## Installation
 Firstly execute the following commands to use [conda](https://docs.conda.io/en/latest/) to create an environment for running asegrm
 ~~~~
-conda create --name asegrm python==3.9.18 numpy==1.26.2
+conda create --name asegrm python==3.9.18 numpy==1.26.2 bcftools==1.15.1
 conda activate asegrm
 ~~~~
 Then go into the asegrm folder and execute the following command to install asegrm and the dependencies
