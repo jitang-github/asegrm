@@ -1,0 +1,638 @@
+#!$CONDA_PREFIX/bin/python
+"""
+ * as-eGRM - Ancestry-specific Genetic Relationship Matrix
+ * Chiang Lab (https://chianglab.usc.edu/) - University of Southern California
+ * Copyright (C) 2024 Ji Tang, Charleston W.K. Chiang
+ *
+ * This program is licensed for academic research use only
+ * unless otherwise stated. Contact jitang@usc.edu, charleston.chiang@med.usc.edu for
+ * commercial licensing options.
+ *
+ * Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Charleston W.K. Chiang)
+"""
+import argparse
+import glob
+import logging
+import math
+import pdb
+import re
+import sys
+import struct
+import os
+import subprocess
+import time
+import gzip
+
+import numpy as np
+import pandas as pd
+import tskit
+import asegrm_matrix as matrix
+from tqdm import tqdm
+
+
+# ======================================================================================================================
+### tools
+def exeCmd(cmd, logFile=None, loggerObj=None):
+    if loggerObj:
+        loggerObj.info(f"Begining execution: {cmd}")
+    else:
+        print(f"[{time.strftime('%R:%S-%D')}]Begining execution: {cmd}")
+    if logFile:
+        with open(logFile, 'w') as fw:
+            exe = subprocess.Popen(cmd, stderr=subprocess.STDOUT, close_fds=True,
+                                   stdout=fw, universal_newlines=True, shell=True, bufsize=1)
+            exe.communicate()  # Wait for process to terminate and set the returncode attribute
+            status = exe.returncode
+            if status:
+                print(f"[{time.strftime('%R:%S-%D')} - ERROR] The detail is recorded in {logFile}")
+    else:
+        exe = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = exe.communicate()
+        status = exe.returncode
+        if status:
+            if loggerObj:
+                loggerObj.error(f"{stderr}")
+            else:
+                print(f"[{time.strftime('%R:%S-%D')} - ERROR]{stderr}")
+    if loggerObj:
+        loggerObj.info(f"Finished execution: {cmd}")
+    else:
+        print(f"[{time.strftime('%R:%S-%D')}]Finished execution: {cmd}")
+
+
+def read_msp_file(mspFile, read_calls, read_pop_code_name, read_samples, read_bp_start_end=True, read_snp_num=False):
+    local_anc_calls = []
+    pop_code_by_name_dict = {}
+    samples = []
+    ancStartIdx = 6
+    with open(mspFile, 'r') as fr:
+        rows = fr.readlines()
+        if read_pop_code_name:
+            for i in re.sub('#Subpopulation order/codes: ', '', rows[0].rstrip('\n')).split('\t'):
+                anc_name, anc_id = i.split('=')
+                pop_code_by_name_dict[anc_name] = int(anc_id)
+        if read_samples:
+            samples = rows[1].rstrip('\n').split('\t')[ancStartIdx:]
+        if read_calls:
+            for row in rows[2:]:
+                cols = row.rstrip('\n').split('\t')
+                segStart, segEnd = cols[1:3]
+                segStart, segEnd = int(segStart), int(segEnd)
+                # genomeLen += (segEnd - segStart)
+                localAncBySampleOrderArray = [int(i) for i in cols[ancStartIdx:]]
+                term = []
+                if read_bp_start_end:
+                    term += [segStart, segEnd]
+                if read_snp_num:
+                    snpNum = int(cols[5])
+                    term += [snpNum]
+                term.append(localAncBySampleOrderArray)
+                local_anc_calls.append(term)
+    rt = []
+    if read_calls:
+        rt.append(local_anc_calls)
+    if read_pop_code_name:
+        rt.append(pop_code_by_name_dict)
+    if read_samples:
+        rt.append(samples)
+    if len(rt) == 1:
+        rt = rt[0]
+    return rt
+
+
+def combine_tree_and_local_anc(treeFile, leaf_ids_file, localAncFile, outFile, log):
+    with open(leaf_ids_file, 'r') as fr:
+        leaf_ids = fr.read().split('\n')
+    leaves_num = len(leaf_ids)
+    skipTree = 0
+    treesObj = tskit.load(treeFile)
+    trees = treesObj.trees()
+    localAncByTreeOrderArray = []
+    treesNum = treesObj.num_trees
+    if localAncFile.endswith('.msp.tsv'):
+        localAncSegments = []
+        localAncSegments_, rfmixSamples = read_msp_file(localAncFile, read_calls=True, read_pop_code_name=False,
+                                                        read_samples=True, read_snp_num=False, read_bp_start_end=True)
+        diff = set(leaf_ids) - set(rfmixSamples)
+        if len(diff) > 0:
+            raise LookupError(f"{diff} not found in {localAncFile}")
+        # prepare the calls in terms of the order of the leaves in the tree
+        sampleIdxByTreeOrder = [rfmixSamples.index(sample) for sample in leaf_ids]
+        localAncSegments_.sort(key=lambda x: x[0], reverse=False)
+        for s, e, local_anc in localAncSegments_:
+            local_anc = [local_anc[i] for i in sampleIdxByTreeOrder]
+            localAncSegments.append([s, e, local_anc])
+
+        localAncByTreeOrderArray.append([-998] * leaves_num), next(trees)  # make the loop below skip the first tree
+        pbar = tqdm(total=treesNum, bar_format='{l_bar}{bar:30}{r_bar}{bar:-30b}', miniters=treesNum // 100)
+        for tree in trees:
+            pbar.update(1)
+            start, end = tree.interval.left, tree.interval.right
+            overlap_segments = []
+            markStart = False
+            for segIdx, v in enumerate(localAncSegments):
+                segStart, segEnd = v[:2]
+                if segStart <= start < segEnd:
+                    markStart = True
+                if markStart:
+                    overlap_segments.append(segIdx)
+                    if end <= segEnd:
+                        break
+            if len(overlap_segments) == 1:
+                localAncBySampleOrderArray = localAncSegments[overlap_segments[0]][2]
+            else:
+                skipTree += 1
+                localAncBySampleOrderArray = [-998] * leaves_num
+            localAncByTreeOrderArray.append(localAncBySampleOrderArray)
+    if localAncFile.endswith('.vcf.gz'):
+        # prepare the subset of the local ancestry calls to speed up the process
+        positions = []
+        for tree in treesObj.trees():
+            s, e = tree.interval
+            positions += [s, e]
+        positions = sorted(positions[2:])  # remove the interval of the first tree and sort
+        start, end = int(positions[0] - 1), int(positions[-1] + 1)
+        chrom = os.popen(f"zcat {localAncFile} | grep -v '^#' | head -n 1").read().split('\t')[0]
+        localAncFile_tmp = localAncFile.replace('.vcf.gz', f'.{start}-{end}.vcf.gz')
+        if not os.path.exists(localAncFile + '.csi'):
+            exeCmd(f'bcftools index {localAncFile}', loggerObj=log)
+        exeCmd(f'bcftools view -r {chrom}:{start}-{end} {localAncFile} -Oz -o {localAncFile_tmp}', loggerObj=log)
+
+        # prepare local ancestry calls for each haplotype
+        anc_by_hap_dict = {}
+        with gzip.open(localAncFile_tmp, 'rt') as fr:
+            line = fr.readline()
+            posStart = False
+            pos_anc_rows = []
+            while line:
+                if posStart:
+                    cols = line.rstrip('\n').split('\t')
+                    pos = int(cols[1])
+                    ancCalls = []
+                    for i in cols[9:]:
+                        anc1, anc2 = i.split(':')[1:]
+                        ancCalls += [anc1, anc2]
+                    pos_anc_rows.append([pos, ancCalls])
+                else:
+                    if line.startswith('#CHROM'):
+                        indIDs = line.strip().split('\t')[9:]
+                        hapIDs = []
+                        for indID in indIDs:
+                            hapIDs.append(indID + '.0')
+                            hapIDs.append(indID + '.1')
+                        diff = set(leaf_ids) - set(hapIDs)
+                        # if 0:
+                        if len(diff) > 0:
+                            raise LookupError(f"{diff} not found in {localAncFile}")
+                        posStart = True
+                line = fr.readline()
+        os.remove(localAncFile_tmp)
+        pos_anc_rows.sort(key=lambda x: x[0], reverse=False)
+        for i, hapID in enumerate(hapIDs):
+            calls = []
+            call_pre = ''
+            for j, (pos, ancCalls) in enumerate(pos_anc_rows[:-1]):
+                call = int(ancCalls[i])
+                pos_next = pos_anc_rows[j + 1][0]
+                if call != call_pre:
+                    call_pre = call
+                    calls.append([pos, pos_next, call])
+                else:
+                    calls[-1][1] = pos_next
+            anc_by_hap_dict[hapID] = calls
+
+        # combine trees and local ancestry calls
+        call_indices = np.zeros(leaves_num,
+                                dtype=int)  # recording the idx of current call for each hap to reduce time cost
+        call_max_indices = []  # recording the number of calls for each hap
+        # ref_count = 0
+        for i in leaf_ids:
+            # try:
+            call_max_indices.append(len(anc_by_hap_dict[i]))
+            # except:
+            #     call_max_indices.append(0)  # temporary for the ~200 reference samples
+                # ref_count += 1
+        # print(f'ref_count: {ref_count}')
+        # cf = leaves_num * multiAncCf
+        cf = leaves_num * 0.1
+        localAncByTreeOrderArray.append([-998] * leaves_num), next(trees)  # make the loop below skip the first tree
+        pbar = tqdm(total=treesNum, bar_format='{l_bar}{bar:30}{r_bar}{bar:-30b}', miniters=treesNum // 100)
+        for tree in trees:
+            pbar.update(1)
+            start, end = tree.interval.left, tree.interval.right
+            localAncBySampleOrderArray = []
+            multi_anc_count = 0
+            for i, s in enumerate(leaf_ids):
+                markStart = False
+                overlap_ancs = []
+                for j in range(call_indices[i], call_max_indices[i]):
+                    pos_start, pos_end, anc = anc_by_hap_dict[s][j]
+                    if pos_start <= start < pos_end:
+                        markStart = True
+                    if markStart:
+                        if end <= pos_end:
+                            overlap_ancs.append(anc)
+                            call_indices[i] = j
+                            break
+                # if len(overlap_ancs) == 0:  # temporary for the ~200 reference samples
+                #    overlap_ancs.append(-998)
+                if len(overlap_ancs) > 1:
+                    multi_anc_count += 1
+                localAncBySampleOrderArray.append(overlap_ancs[0])
+            if multi_anc_count > cf:  # skip this tree when the number of the leaves with multiple ancestries is larger than cf,
+                skipTree += 1
+                localAncBySampleOrderArray = [-998] * leaves_num
+            localAncByTreeOrderArray.append(localAncBySampleOrderArray)
+
+    localAncByTreeOrderArray = np.array(localAncByTreeOrderArray)
+    np.save(outFile, localAncByTreeOrderArray)
+    with open(f"{re.sub('.npy', '.skipped_trees', outFile)}", 'w') as fw:
+        prop_of_skipped_trees = round(skipTree / treesNum, 2)
+        if prop_of_skipped_trees > 0.1:
+            log.warning(
+                f"{round(prop_of_skipped_trees * 100)}% of trees are skipped while the combining. "
+                "These trees have no any contribution to constructing the ancestry-specific GRM")
+        fw.write(
+            f'Number_of_all_trees\tNumber_of_skipped_trees\tProportion_of_skipped_trees\n{treesNum}\t{skipTree}\t{round(prop_of_skipped_trees * 100)}%\n')
+
+
+def pop_name_to_code(localAncFile, pop_name):
+    if localAncFile.endswith('.msp.tsv'):
+        pop_code_by_name_dict = read_msp_file(localAncFile, read_calls=False, read_pop_code_name=True,
+                                              read_samples=False, read_bp_start_end=True, read_snp_num=False)
+        pop_code = pop_code_by_name_dict[pop_name]
+    else:
+        with gzip.open(localAncFile, 'rt') as fr:
+            line = fr.readline()
+            while line:
+                if line.startswith('##ANCESTRY='):
+                    anc_codes = re.search('<(.*)>', line).group(1)
+                    break
+                line = fr.readline()
+        pop_code_by_name_dict = {}
+        for i in anc_codes.split(','):
+            name, code = i.split('=')
+            pop_code_by_name_dict[name] = int(code)
+        pop_code = pop_code_by_name_dict[pop_name]
+    return pop_code
+
+
+def mat_C_to_ndarray(mat_C):
+    buffer = matrix.export_ndarray(mat_C)
+    buffer = buffer + np.transpose(buffer) - np.diag(np.diag(buffer))
+    return buffer
+
+
+def get_logger(name, path=None):
+    """
+    Simple function to set up logging to screen and output file if specified
+    """
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        # Prevent logging from propagating to the root logger
+        logger.propagate = 0
+        console = logging.StreamHandler()
+        logger.addHandler(console)
+
+        log_format = "[%(asctime)s - %(levelname)s] %(message)s"
+        date_format = "%Y-%m-%d %H:%M:%S"
+        formatter = logging.Formatter(fmt=log_format, datefmt=date_format)
+        console.setFormatter(formatter)
+
+        if path is not None:
+            disk_log_stream = open("{}.log".format(path), "w")
+            disk_handler = logging.StreamHandler(disk_log_stream)
+            logger.addHandler(disk_handler)
+            disk_handler.setFormatter(formatter)
+
+    return logger
+
+
+def write_gcta_bin(K, mu, ids, output):
+    """
+    Write out eGRM in GCTA binary format.
+
+    :param: K numpy.ndarray of expected relatedness
+    :param: mu floating point number of expected mutations
+    :param: numpy.ndarray/list of individual IDs
+    :param: str of output
+    :returns: None
+    """
+    # todo: write out 3 files in GCTA format
+    # K = prefix_path.grm.bin; relatedness diagonal + lower diagonal
+    # mu = prefix_path.grm.N.bin; number of shared mutations between individuals on diagonal + lower diagonal
+    # samples = prefix_path.grm.id; 2 column text = family_id individual_id
+    n, n = K.shape
+    with open("{}.grm.bin".format(output), "wb") as grmfile:
+        for idx in range(n):
+            for jdx in range(idx + 1):
+                val = struct.pack("f", K[idx, jdx])
+                grmfile.write(val)
+
+    with open("{}.grm.N.bin".format(output), "wb") as grmfile:
+        for idx in range(n):
+            for jdx in range(idx + 1):
+                val = struct.pack("f", mu)
+                grmfile.write(val)
+
+    with open("{}.grm.id".format(output), "w") as grmfile:
+        for idx in range(n):
+            fid = 0
+            iid = ids[idx]
+            grmfile.write("\t".join([str(fid), str(iid)]) + os.linesep)
+
+    return
+
+
+# defines [Gmap] object which maps the physical position (in bp) into genetic position (in unit of 10^-6 cM)
+# can be initiated by Gmap(filename), where filename is a (comma/space/tab separated) three-column file
+# with first column specifying the physical position in bp and the third column specifying the genetic position in cM.
+# The second column is not used. The first line will always be ignored as the header.
+class Gmap:
+    def __init__(self, filename):
+        if filename is None:
+            self.mapped = False
+            return
+        self.table = pd.read_csv(filename, sep=None, engine='python')
+        self.pos = self.table.iloc[:, 0].astype(int)
+        self.gpos = self.table.iloc[:, 2].astype(float) * 1e6
+        self.max = self.table.shape[0]
+        self.i = 0
+        self.mapped = True
+
+    def __call__(self, pos):
+        if self.mapped == False:
+            return pos
+        while (self.i > 0 and pos < self.pos[self.i - 1]):
+            self.i -= 1
+        while (self.i < self.max and pos > self.pos[self.i]):
+            self.i += 1
+        if self.i == 0:
+            return 0
+        if self.i >= self.max:
+            return self.gpos[self.max - 1]
+        A = pos - self.pos[self.i - 1]
+        B = (self.gpos[self.i] - self.gpos[self.i - 1]) / (self.pos[self.i] - self.pos[self.i - 1])
+        C = self.gpos[self.i - 1]
+        return A * B + C
+
+
+# ======================================================================================================================
+### as-egrm
+def asegrm(trees,
+           asSamplesByTreesList,
+           rlim=0, alim=math.inf,
+           left=0, right=math.inf,
+           gmap=Gmap(None),
+           g=(lambda x: (1 - x) / x),
+           sft=False):
+    num_samples = trees.num_samples
+    num_trees = trees.num_trees
+    egrm_C_all = matrix.new_matrix(num_samples)
+    mu_mat_C = matrix.new_matrix(num_samples)
+
+    pbar = tqdm(total=trees.num_trees, bar_format='{l_bar}{bar:30}{r_bar}{bar:-30b}', miniters=trees.num_trees // 100,
+                file=None)
+
+    trees_ = trees.trees()
+
+    if sft:
+        next(trees_)
+        num_trees -= 1
+        asSamplesByTreesList = asSamplesByTreesList[1:]
+
+    assert num_trees == len(asSamplesByTreesList)
+
+    treeIdx = -1
+    for tree in trees_:
+        pbar.update(1)
+        treeIdx += 1
+
+        egrm_C = matrix.new_matrix(num_samples)
+        mu_one_tree = 0
+
+        asSamples = asSamplesByTreesList[treeIdx]
+        num_asSamples = len(asSamples)
+        if num_asSamples == 0: continue
+
+        l = - gmap(max(left, tree.interval[0])) + gmap(min(right, tree.interval[1]))
+        if l <= 0: continue
+        if tree.total_branch_length == 0: continue
+
+        for c in tree.nodes():
+            descendants_init = list(tree.samples(c))
+            n_init = len(descendants_init)
+            if (n_init == 0 or n_init == num_samples): continue
+            descendants = list(set(descendants_init) & set(asSamples))
+
+            # compute the mu
+            t = max(0, min(alim, tree.time(tree.parent(c))) - max(rlim, tree.time(c)))
+            if t == 0: continue
+            mu = l * t * 1e-8
+
+            # compute the p
+            n = len(descendants)
+            if n == 0 or n == num_asSamples: continue
+            if n == 1: continue  # skip the singleton because it has no any contribution to defining the pairwise relationship
+            p = float(n / num_asSamples)
+            matrix.add_square(egrm_C, descendants, mu * g(p))
+            mu_one_tree += mu
+
+        if mu_one_tree == 0: continue
+
+        # update egrm_C_all
+        matrix.add(egrm_C_all, egrm_C)
+
+        # update mu_mat_C
+        non_asSamples = sorted(list(set(range(num_samples)) - set(asSamples)))
+        mu_mat_one_tree_C = matrix.new_matrix(num_samples)
+        matrix.set_values(mu_mat_one_tree_C, mu_one_tree)
+        matrix.set_zeros_by_idx(mu_mat_one_tree_C, non_asSamples)
+        matrix.add(mu_mat_C, mu_mat_one_tree_C)
+
+        # release memory
+        matrix.destroy_matrix(egrm_C)
+        matrix.destroy_matrix(mu_mat_one_tree_C)
+
+    egrm_all = mat_C_to_ndarray(egrm_C_all)
+    mu_mat = mat_C_to_ndarray(mu_mat_C)
+
+    pbar.close()
+    return egrm_all, mu_mat
+
+
+def merge(dataPath):
+    files = glob.glob(f'{dataPath}/*.asegrm.npy')
+    files_by_tgt_dict = {}
+    for i in files:
+        tgt = i.split('.')[-3]
+        if tgt not in files_by_tgt_dict:
+            files_by_tgt_dict[tgt] = []
+        files_by_tgt_dict[tgt].append(i)
+    for tgt, files in files_by_tgt_dict.items():
+        outFile_h = f'{dataPath}/merged.{tgt}.asegrm.haploid.npy'
+        outFile_d = f'{dataPath}/merged.{tgt}.asegrm.diploid.npy'
+        logFile = f'{dataPath}/merged.{tgt}.asegrm.log'
+        log = get_logger(__name__, f"{logFile}")
+        log.setLevel(logging.INFO)
+        log.info('Begining merging')
+        if os.path.exists(outFile_h) and os.path.exists(outFile_d):
+            log.info(f'{outFile_d} and {outFile_h} already exist. To recompute, delete the files.')
+            continue
+        log.info(
+            f'Found {len(files)} chrs/chunks for generating {os.path.basename(outFile_d)} and {os.path.basename(outFile_d)}')
+        file_pairs = []
+        for file in files:
+            file_pairs.append((file, file.replace('.npy', '.mu.npy')))
+
+        asegrm = 0
+        mu = 0
+        for f, f_mu in tqdm(file_pairs):
+            egrm_ = np.load(f)
+            mu_ = np.load(f_mu)
+            asegrm += egrm_
+            mu += mu_
+
+        mu += 1e-13
+        asegrm /= mu
+        asegrm -= asegrm.mean(axis=0)
+        asegrm -= asegrm.mean(axis=1, keepdims=True)
+
+        np.save(outFile_h, asegrm)
+
+        N = asegrm.shape[0]
+        maternals = np.array(range(0, N, 2))
+        paternals = np.array(range(1, N, 2))
+        asegrm = 0.5 * (asegrm[maternals, :][:, maternals] + asegrm[maternals, :][:, paternals] + \
+                        asegrm[paternals, :][:, maternals] + asegrm[paternals, :][:, paternals])
+        np.save(outFile_d, asegrm)
+        log.info('Merging DONE!')
+
+
+def run_asegrm(args, log):
+    # load tree sequence data
+    trees_name = f"{os.path.basename(args.trees)}"
+    log.info(f"Beginning importing tree sequence at {trees_name}")
+    trees = tskit.load(args.trees)
+    log.info(f"Finished importing tree sequence at {trees_name}")
+
+    # log.info("Constructing genetic map")
+    gmap = Gmap(args.genetic_map)
+
+    # load local ancestry calls ordered by trees
+    localAncByTrees = np.load(args.tree_lac_file)
+    asSamplesByTreesList = []
+    for localAncByTree in localAncByTrees:
+        asSamples = np.where(localAncByTree == args.target_ancestry_code)[0].tolist()
+        asSamplesByTreesList.append(asSamples)
+
+    # specify the weighting function
+    gp = (lambda x: 1 / (x * (1 - x)))
+    if args.gp == 'gp1':
+        gp = (lambda x: (1 - x) / x)
+    if args.gp == 'gp2':
+        gp = (lambda x: (1 - x) / (x * x))
+
+    # construct params dict
+    params = {
+        "trees": trees,
+        # "log": log,
+        "rlim": args.rlim,
+        "alim": args.alim,
+        "left": args.left,
+        "right": args.right,
+        "gmap": gmap,
+        "g": gp,
+        "sft": True,  # args.skip_first_tree,
+        "asSamplesByTreesList": asSamplesByTreesList,
+    }
+
+    log.info("Beginning as-eGRM estimation")
+    egrm, egrm_mu = asegrm(**params)
+    log.info("Finished as-eGRM estimation")
+
+    # output/save as-eGRM
+    log.info("Beginning export of as-eGRM")
+    np.save(args.asegrm_file + ".npy", egrm)
+    np.save(args.asegrm_file + ".mu.npy", egrm_mu)
+    log.info("Finished export of as-eGRM")
+    log.info("Finished! :D")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="sub-commands")
+    parser1 = subparsers.add_parser('compute', help="Run asegrm on one chr/chunk")
+    # required arguments
+    parser1.add_argument("--trees", "--trees", type=str, required=True,
+                         help="Path to ts-kit tree sequence file of one chr/chunk")
+    parser1.add_argument("--leaf_ids", "--ts", type=str, required=True,
+                         help="Path to the file of the IDs of the leaves on the trees. No header, one ID per line. "
+                              "Ensure the order of the IDs is the same as the leaves'. "
+                              "For some ARG-reconstruction software packages like Relate "
+                              "(https://myersgroup.github.io/relate/index.html), SINGER "
+                              "(https://github.com/popgenmethods/SINGER), tsinfer-tsdate "
+                              "(https://github.com/tskit-dev/tsdate?tab=readme-ov-file), "
+                              "the order of the leaves on the output trees is the same as the order of the samples in "
+                              "the input VCF file. For these packages, you can read the sample IDs from the VCF, "
+                              "keep the same order, and append .0 and .1 to each sample ID (because each leaf "
+                              "represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across "
+                              "chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry.")
+    parser1.add_argument("--local_ancestry", "--la", type=str, required=True,
+                         help="Local ancestry calls of the same chr as the tree sequence. "
+                              "Currently support the .msp.tsv file from RFMix (https://github.com/slowkoni/rfmix) "
+                              "and the .vcf.gz file from flare (https://github.com/browning-lab/flare). "
+                              "When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome "
+                              "as long as it covers the tree sequence region.")
+    parser1.add_argument("--target_ancestry", "--ta", type=str, required=True,
+                         help="Population name of the ancestry being targeted for investigation. All other ancestries "
+                              "are masked when as-egrm is running. The name should be included in the file indexed by "
+                              "the --local_ancestry.")
+    parser1.add_argument("--genetic_map", "--map", type=str, required=True, default=None,
+                         help="Path to the genetic map file, which is a (comma/space/tab separated) three-column file "
+                              "with the first column specifying the physical position in bp and the third column "
+                              "specifying the genetic position in cM. The first line will always be ignored as "
+                              "the header.")
+    parser1.add_argument("--output_path", "--o", type=str, required=True, help="Path to output directory")
+
+    # optional arguments
+    parser1.add_argument("--gp", "--gp", default='gp1', type=str, help="The function up-weighting recent branches")
+    parser1.add_argument("--left", "--l", type=int, default=0, help="leftmost genomic position to be included")
+    parser1.add_argument("--right", "--r", type=int, default=math.inf, help="rightmost genomic position to be included")
+    parser1.add_argument("--rlim", type=float, default=0, help="most recent time limit")
+    parser1.add_argument("--alim", type=float, default=math.inf, help="most ancient time limit")
+    parser1.add_argument("--verbose", default=False, action="store_true", help="verbose logging. Includes debug info.")
+    parser2 = subparsers.add_parser('merge', help="Merge the outputs across chrs/chunks to generate the final output")
+    parser2.add_argument('output_path', help='The path indexed by the --output_path when running the compute step')
+    if len(sys.argv) == 1:
+        parser.parse_args(['--help'])
+    else:
+        assert sys.argv[1] in ['-h', '--help', 'compute', 'merge']
+        args = parser.parse_args()
+        if sys.argv[1] == 'compute':
+            assert args.trees.endswith('.trees')
+            assert args.local_ancestry.endswith('.msp.tsv') or args.local_ancestry.endswith('.vcf.gz')
+            os.makedirs(args.output_path, exist_ok=True)
+            treeFileName = os.path.basename(args.trees)
+            tree_lac_file = f"{args.output_path}/{treeFileName}.lac.npy"
+            args.log_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}"
+            log = get_logger(__name__, f"{args.log_file}")
+            if args.verbose:
+                log.setLevel(logging.DEBUG)
+            else:
+                log.setLevel(logging.INFO)
+            args.tree_lac_file = tree_lac_file
+            if not os.path.exists(
+                    tree_lac_file):  # just need to prepare tree_lac_file once for running asegrm on multiple target ancestries
+                log.info(f"Begining combining trees and local ancestry")
+                combine_tree_and_local_anc(args.trees, args.leaf_ids, args.local_ancestry, tree_lac_file, log)
+                log.info(f"Finished combining trees and local ancestry")
+            else:
+                log.info(f"Found {tree_lac_file}. Skip combining trees and local ancestry.")
+            args.target_ancestry_code = pop_name_to_code(args.local_ancestry, args.target_ancestry)
+            args.asegrm_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}.asegrm"
+            run_asegrm(args, log)
+        elif sys.argv[1] == 'merge':
+            merge(args.output_path)
+        else:
+            parser.parse_args(['--help'])

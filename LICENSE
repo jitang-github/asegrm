@@ -1,0 +1,9 @@
+* as-eGRM - Ancestry-specific Genetic Relationship Matrix
+* Chiang Lab (https://chianglab.usc.edu/) - University of Southern California
+* Copyright (C) 2024 Ji Tang, Charleston W.K. Chiang
+*
+* This program is licensed for academic research use only
+* unless otherwise stated. Contact jitang@usc.edu, charleston.chiang@med.usc.edu for
+* commercial licensing options.
+*
+* Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Charleston W.K. Chiang)
