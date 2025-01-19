@@ -102,7 +102,7 @@ def read_msp_file(mspFile, read_calls, read_pop_code_name, read_samples, read_bp
 
 def combine_tree_and_local_anc(treeFile, leaf_ids_file, localAncFile, outFile, log):
     with open(leaf_ids_file, 'r') as fr:
-        leaf_ids = fr.read().split('\n')
+        leaf_ids = fr.read().rstrip().split('\n')
     leaves_num = len(leaf_ids)
     skipTree = 0
     treesObj = tskit.load(treeFile)
