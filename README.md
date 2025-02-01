@@ -18,9 +18,7 @@ To enable running parallel jobs under diverse computation environments, the runn
 
 ### Running *compute* step
 ~~~
-asegrm compute [-h] --input INPUT --output_path OUTPUT_PATH --trees TREES --treeSamples TREESAMPLES --local_ancetry LOCAL_ANCETRY
-                         --target-ancestry TARGET_ANCESTRY --genetic-map GENETIC_MAP [--gp GP] [--left LEFT] [--right RIGHT]
-                         [--rlim RLIM] [--alim ALIM] [--verbose] [--output-format {gcta,numpy}]
+asegrm compute [-h] --trees TREES --leaf_ids LEAF_IDS --local_ancestry LOCAL_ANCESTRY --target_ancestry TARGET_ANCESTRY --genetic_map GENETIC_MAP --output_path OUTPUT_PATH [--gp GP] [--left LEFT] [--right RIGHT] [--rlim RLIM] [--alim ALIM] [--verbose]
 ~~~
 #### Required arguments
 - --trees: Path to [tskit](https://tskit.dev/software/tskit.html) tree sequence file of one chr/chunk
