@@ -1,5 +1,8 @@
 import os
+import pdb
 import re
+import sys
+import gzip
 import time
 import tskit
 import subprocess
@@ -12,11 +15,10 @@ import matplotlib.pyplot as plt
 from scipy.spatial import distance_matrix
 import umap.umap_ as umap
 
-PATH_TO_RELATE = os.environ['HOME'] + '/software/relate_v1.2.0_x86_64_static'
 
 # ======================================================================================================================
 # generic utils
-def exeCmd(cmd, logFile=None, loggerObj=None): # todo: update the chiang lab version
+def exeCmd(cmd, logFile=None, loggerObj=None):  # todo: update the chiang lab version
     if loggerObj:
         loggerObj.info(f"Begining execution: {cmd}")
     else:
@@ -69,7 +71,7 @@ def eigendecomposition_on_grm(X, num_dims=100):
 
 # ======================================================================================================================
 # VCF utils
-def createOutVcfFile(outVcfFile_tmp, outVcfFile):# todo: update the chiang lab version
+def createOutVcfFile(outVcfFile_tmp, outVcfFile):  # todo: update the chiang lab version
     if not outVcfFile_tmp.endswith('.gz'):
         exeCmd(f'bgzip {outVcfFile_tmp}')
         outVcfFile_tmp = outVcfFile_tmp + '.gz'
@@ -203,6 +205,23 @@ def rm_dup_positions(inVcfFile, outVcfFile=None):
     createOutVcfFile(outVcfFile_tmp, outVcfFile)
 
 
+def read_samples_positions(vcfFile, read_samples, read_positions, multi_chr=False):
+    rt = []
+    if read_samples:
+        cmd = f'bcftools query -l {vcfFile}'
+        samples = [i.rstrip('\n') for i in os.popen(cmd).readlines()]
+        rt.append(samples)
+    if read_positions:
+        cmd = f'bcftools query -f "%CHROM:%POS\\n" {vcfFile}'
+        positions = [i.rstrip('\n') for i in os.popen(cmd).readlines()]
+        if not multi_chr:
+            positions = [int(i.split(':')[1]) for i in positions]
+        rt.append(positions)
+    if len(rt) == 1:
+        rt = rt[0]
+    return rt
+
+
 # ======================================================================================================================
 # utils for local ancestry inference
 def calc_genetic_map_for_sim_data(positions, recombRate):
@@ -224,7 +243,7 @@ def run_rfmix(queryFile, refFile, sampleMapFile, recombMapFile, outFile, chrN, l
     os.makedirs(os.path.dirname(logFile), exist_ok=True)
 
     # cmd = '/project/jitang_1167/software/rfmix-master/rfmix '
-    cmd = '/project/chia657_28/programs/rfmix/rfmix '
+    cmd = PATH_TO_RFMix #'/project/chia657_28/programs/rfmix/rfmix '
     cmd += ' -f ' + queryFile
     cmd += ' -r ' + refFile
     cmd += ' -m ' + sampleMapFile
@@ -379,20 +398,10 @@ def FlipHapsUsingAncestor(inHapFile, inSampleFile, inAncestalAllele, outFile):
     exeCmd(cmd)
 
 
-def run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName, RelateOutPath, threadsNum=None,
+def run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName, RelateOutPath,
                memory=None,  # only number(unit: gigabytes)
                logFile=None, idx=None,
                totalN=None, step=None, overWrite=False):
-    """
-    ${PATH_TO_RELATE}/bin/Relate --mode All \
-    --haps ./data/example.haps.gz \
-    --sample ./data/example.sample.gz \
-    --map ./data/genetic_map_GRCh37_chr1.txt \
-    -N 30000 \
-    -m 1.25e-8 \
-    -o example \
-    --seed 1
-    """
     if not overWrite:
         if os.path.exists(RelateOutPath + '/' + outFileName + '.anc') and \
                 os.path.exists(RelateOutPath + '/' + outFileName + '.mut'):
@@ -402,13 +411,7 @@ def run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName, Rel
             step = 10000
         if idx % step == 0:
             print('Progress of hap2RelateARG: %i/%i' % (idx, totalN))
-    # RelatePath = os.environ['HOME'] + '/software/Relate/relate_v1.1.8_x86_64_dynamic'
-    RelatePath = os.environ['HOME'] + '/software/relate_v1.2.0_x86_64_static'
-    if threadsNum is not None:
-        cmd = RelatePath + '/scripts/RelateParallel/RelateParallel.sh --mode All'
-        cmd += ' --threads ' + threadsNum
-    else:
-        cmd = RelatePath + '/bin/Relate --mode All'
+    cmd = PATH_TO_RELATE + '/bin/Relate --mode All'
     if memory:
         cmd += ' --memory ' + memory
     cmd += ' --haps ' + hapFile
@@ -419,30 +422,19 @@ def run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName, Rel
     cmd += ' -o ' + outFileName
     cmd += ' --seed 1 '
 
-    # exeCmd('cd '+RelateOutPath)
     current_dir = os.getcwd()
     os.chdir(RelateOutPath)
     exeCmd(cmd, logFile=logFile)
     os.chdir(current_dir)
-    # exeCmd('mv ' + outFileName + '.anc ' + outFileName + '.mut ' + RelateOutPath)
 
 
 def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, recombMapFile=None,
-                       vcfFile=None, flipGenoByAncestor=True, chrN=None, hapMat=None, fileName=None,treesFile=None,
-                       positions=None, positionIDs=None, memory='16', logFile=None):
-    if vcfFile is not None:
-        inputType = 'vcf'
-        if fileName is None:
-            fileName = vcfFile.split('/')[-1].rstrip('.vcf').rstrip('.vcf.gz')
-        if flipGenoByAncestor:
-            assert chrN is not None, 'chrN should be provided if vcfFile is provided'
-    elif hapMat is not None:
-        inputType = 'hapMat'
-        assert fileName is not None, 'fileName should be provided if hapMat is provided'
-        assert positions is not None, 'positions should be provided if hapMat is provided'
-        assert positionIDs is not None, 'positionIDs should be provided if hapMat is provided'
-    else:
-        raise ValueError('one of vcfFile and hapMat should be provided')
+                       vcfFile=None, chrN=None, fileName=None, treesFile=None,
+                       positions=None, memory='16', logFile=None):
+    # if vcfFile is not None:
+    inputType = 'vcf'
+    if fileName is None:
+        fileName = vcfFile.split('/')[-1].rstrip('.vcf').rstrip('.vcf.gz')
 
     os.makedirs(relate_input_output_path, exist_ok=True)
     if treesFile is None:
@@ -463,29 +455,6 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
                         f2.write(line)
             exeCmd(f'rm -f {hapFile}')
             exeCmd(f'mv {hapFile_tmp} {hapFile}')
-            if flipGenoByAncestor:
-                inAncestalAllele = f'/project/chia657_28/resources/ancestral_alignments/human_ancestor_GRCh38_e107/homo_sapiens_ancestor_{chrN}.fa'
-                hapFile_tmp = hapFile.rstrip('.haps') + '.flipped'
-                FlipHapsUsingAncestor(hapFile, sampleFile, inAncestalAllele, hapFile_tmp)
-                exeCmd(f'rm -f {hapFile}')
-                hapFile = hapFile_tmp + '.haps'
-        if inputType == 'hapMat':
-            haps_file = open(hapFile, "w")
-            i = 0
-            for idx, posID in enumerate(positionIDs):
-                string = "1 snp" + str(posID + 1) + " " + str(positions[idx]) + " A" + " T "
-                string = string + " ".join([str(i) for i in hapMat[:, idx]]) + "\n"
-                bytes = haps_file.write(string)
-                i += 1
-            haps_file.close()
-            sample_file = open(sampleFile, "w")
-            sample_file.write("ID_1 ID_2 missing\n0 0 0\n")
-            N = hapMat.shape[0]
-            for idx in range(int(N)):
-                string = "UNR" + str(idx + 1) + " NA" + " 0\n"
-                bytes = sample_file.write(string)
-            sample_file.close()
-
         if positions is None:
             positions = []
             with open(hapFile, 'r') as fr:
@@ -506,7 +475,7 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
         run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName=f'relateOut_{fileName}',
                    RelateOutPath=relate_input_output_path, logFile=logFile, memory=memory)
         os.system(
-            "/project/jitang_1167/software/relate_v1.2.0_x86_64_static/bin/RelateFileFormats --mode ConvertToTreeSequence "
+            PATH_TO_RELATE + "/bin/RelateFileFormats --mode ConvertToTreeSequence "
             + "-i "
             + f"{relate_input_output_path}/relateOut_{fileName}"
             + " -o "
@@ -558,7 +527,7 @@ def get_samples_by_pop(samplesFile=None, pops=None, sampleIDbyPopNameDict=None, 
 
 
 def plot_pca_umap(PCs, true_labels, pcaFig, umapFigPath, pcaFigTitle, umapFigTitle, sampleRGBs, sampleShapes,
-                  separation_index_file=None, pca_on_dip=False, plot4pub=False):
+                  pca_on_dip=False, plot4pub=False):
     def Plot(outfig, components, figTitle=None, axisName=None, textBoxAnnot=None, sampleRGBs=None,
              sampleShapes=None, edgeColors=None, markerSizes=30):
         component1 = components[:, 0]
@@ -655,10 +624,6 @@ def plot_pca_umap(PCs, true_labels, pcaFig, umapFigPath, pcaFigTitle, umapFigTit
                          sampleShapes=sampleShapes,
                          figTitle=umapFigTitle, edgeColors=edgeColors, textBoxAnnot=textBoxAnnot,
                          markerSizes=markerSizes)
-    if separation_index_file is not None:
-        with open(separation_index_file, 'w') as fw:
-            fw.write(f'pcSI\tumapSIs\n')
-            fw.write(f'{pcSI}\t{",".join([str(x) for x in umapSIs])}\n')
 
 
 def calcOverLapLen(start_end_1, start_end_2):
@@ -1170,31 +1135,19 @@ def schemesForSim(simScheme, sampleAnc, sample_size=None):
 
 
 ### simulation
-def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnArgs=False, simScheme=None, args=None,
-                            LACname=None):
-    assert parallelType in ['chrs', 'chunks']
-    if not returnArgs:
-        if parallelType == 'chrs':
-            assert task in ['sim_calc', 'plot']
-        elif parallelType == 'chunks':
-            assert task in ['sim', 'calc', 'plot']
-    as_egrm_v = 'as-egrm-v5'
+def asegrm_on_sim(simScheme, task, taskIdx):
+    assert task in ['sim', 'calc', 'plot']
     overwrite = False
     asegrm_pca = 'pca'  # standard PCA
 
-    LAC_ARG_list = [('rfmixLAC', 'relateARG')]
+    LACname = 'rfmixLAC'
+    ARGname = 'relateARG'
 
     sampleAnc = True
     plot4pub = True
 
-    # methodNames = ['as-egrm-c-new-gp1', 'egrm']
-    methodNames = ['as-egrm-c-new-gp1']
+    methodName = 'as-eGRM'
     pub_fig2 = True
-    if returnArgs and simScheme is not None:
-        simSchemes = [simScheme]
-    else:
-        # simSchemes = ['twoAnc3x3GridDer3']
-        simSchemes = ['gLikeFig6A-6']
 
     chrNums = list(range(1, 11))
     chrNums_plot = list(range(1, 11))
@@ -1202,35 +1155,31 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
     specifiedSampleSize = 500
     ploidy_sim = 2
     pca_on_dip = True
-    norm_grm = False
 
     tasks = []
     chrN = None
-    method, ARGname = None, None
-    if not returnArgs:
-        if task == 'calc':
-            for methodName in methodNames:
-                for LACname, ARGname in LAC_ARG_list:
-                    for simScheme in simSchemes:
-                        argsList = schemesForSim(simScheme, sampleAnc=sampleAnc, sample_size=specifiedSampleSize)
-                        for args in argsList:
-                            for chrN in chrNums:
-                                tasks.append([methodName, simScheme, args, chrN, LACname, ARGname])
-            method, simScheme, args, chrN, LACname, ARGname = tasks[taskIdx]
-        else:
-            for methodName in methodNames:
-                for LACname, ARGname in LAC_ARG_list:
-                    for simScheme in simSchemes:
-                        argsList = schemesForSim(simScheme, sampleAnc=sampleAnc, sample_size=specifiedSampleSize)
-                        for args in argsList:
-                            tasks.append([methodName, simScheme, args, LACname, ARGname])
-            method, simScheme, args, LACname, ARGname = tasks[taskIdx]
+    # if not returnArgs:
+    if task == 'calc':
+        # for methodName in methodNames:
+        # for LACname, ARGname in LAC_ARG_list:
+        # for simScheme in simSchemes:
+        argsList = schemesForSim(simScheme, sampleAnc=sampleAnc, sample_size=specifiedSampleSize)
+        for args in argsList:
+            for chrN in chrNums:
+                tasks.append([methodName, simScheme, args, chrN, LACname, ARGname])
+        method, simScheme, args, chrN, LACname, ARGname = tasks[taskIdx]
+    else:
+        # for methodName in methodNames:
+        # for LACname, ARGname in LAC_ARG_list:
+        # for simScheme in simSchemes:
+        argsList = schemesForSim(simScheme, sampleAnc=sampleAnc, sample_size=specifiedSampleSize)
+        for args in argsList:
+            tasks.append([methodName, simScheme, args, LACname, ARGname])
+        method, simScheme, args, LACname, ARGname = tasks[taskIdx]
+    # pdb.set_trace()
 
     args.update({'simScheme': simScheme})
-    schemePath = f'./simulation/{simScheme}_{as_egrm_v}'
-    schemePath += f'_{parallelType}'
-    if specifiedSampleSize is not None:
-        schemePath += f'_sampleSize{specifiedSampleSize}'
+    schemePath = f'./simulation/{simScheme}'
     os.makedirs(schemePath, exist_ok=True)
 
     args['schemePath'] = schemePath
@@ -1247,11 +1196,6 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
     if 'twoAnc' in simScheme:
         tgtAnc = 'a1'
         ancPops = ['a1', 'a2']
-    removedPops = list(set(ancPops) - {tgtAnc})
-    # calcTractLens = True if LACname else False
-    calcTractLens = False
-
-    obssForARG, obssForLAC, obssProp = False, False, None
 
     if 'GridDer' in simScheme:
         colorBy = 'pop'
@@ -1285,24 +1229,12 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
         if args['migration_rate'] > 0:
             label += f"_mig{args['migration_rate']}-{args['migration_stop_t']}"
 
-        if 'a2-Ne' in args:
-            label += f"_a2-Ne{args['a2-Ne']}"
-
-    # args['chrLength'] = 100000  # for quick test
-
     chrLength_all = args['chrLength'] * len(chrNums)
-    if parallelType == 'chunks':
-        label += f"_{int(chrLength_all / 1000000)}Mb"
+    label += f"_{int(chrLength_all / 1000000)}Mb"
 
     genotypesPath = f'{schemePath}/genotypes'
     os.makedirs(genotypesPath, exist_ok=True)
     rfmix_input_output_path = f"{args['schemePath']}/rfmix_input_output"
-    if obssForLAC:
-        rfmix_input_output_path += f"_obss{obssProp}"
-        os.makedirs(rfmix_input_output_path, exist_ok=True)
-    anc_prop_path = f"{schemePath}/anc_prop_{LACname}"
-    os.makedirs(anc_prop_path, exist_ok=True)
-    anc_prop_file_forPlot = f"{anc_prop_path}/{label}_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}.p"
 
     samplesFile_query = f'{schemePath}/samples_query.txt'
     samplesFile_ref = f'{schemePath}/samples_ref.txt'
@@ -1314,43 +1246,12 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
     treeSeqFile_all = f'{treeSeqPath}/{label}'
     treeSeqFile_all += '_record_migrations'
 
-    args.update({'ancPops': ancPops, 'removedPops': removedPops,
-                 'tgtAnc': tgtAnc,
-                 'true_labels': true_labels, 'label': label,
-                 'genotypesPath': genotypesPath,
-                 'rfmix_input_output_path': rfmix_input_output_path,
-                 'anc_prop_path': anc_prop_path,
-                 'anc_prop_file_forPlot': anc_prop_file_forPlot,
-                 'samplesFile_query': samplesFile_query,
-                 'samplesFile_ref': samplesFile_ref,
-                 'samplesFile_query_dip': samplesFile_query_dip,
-                 'samplesFile_ref_dip': samplesFile_ref_dip,
-                 'colorBy': colorBy,
-                 'colorLabel': colorLabel,
-                 'ploidy_sim': ploidy_sim,
-                 'chrNums': chrNums,
-                 'chrNums_plot': chrNums_plot,
-                 'treeSeqFile_all': treeSeqFile_all,
-                 })
-    if returnArgs:
-        return args
-
     LAClabel = LACname
     ARGlabel = ARGname
-    if obssForLAC:
-        LAClabel += f'-obss{obssProp}'
-    if obssForARG:
-        ARGlabel += f'-obss{obssProp}'
-    if 'as-egrm-c-new' in method:
-        methodPath = f"{schemePath}/{re.sub('as-egrm-c-new', 'asegrm1', method)}_{ARGlabel}_{LAClabel}"
-    else:
-        methodPath = f"{schemePath}/{re.sub('as-egrm-c', 'asegrm', method)}_{ARGlabel}_{LAClabel}"
-    if method == 'egrm':
-        methodPath = f'{schemePath}/egrm_{ARGlabel}'
+    methodPath = f"{schemePath}/{method}_{ARGlabel}_{LAClabel}"
     os.makedirs(methodPath, exist_ok=True)
     method_output_path = f'{methodPath}/{method}_output'
     os.makedirs(method_output_path, exist_ok=True)
-    # pdb.set_trace()
     demography, popIDbyNameDict, sampleIDbyPopNameDict = defineDemog(args, sampleAnc=sampleAnc)
     args.update({'popIDbyNameDict': popIDbyNameDict, 'sampleIDbyPopNameDict': sampleIDbyPopNameDict})
     sampleSizeByPopDict_ = args['sampleSizeByPopDict']
@@ -1387,39 +1288,25 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
             trees = msprime.sim_mutations(trees, rate=args['mutation_rate'], discrete_genome=False)
             trees.dump(treeSeqFile_all)
 
-    elif task in ['calc', 'sim_calc']:
-        toBeMerged = True
+    elif task in ['calc']:
         label_chr = f'{label}_chr{chrN}'
         outFile_chr = f"{method_output_path}/{label_chr}.p"
-        # outFile_chr = f"{method_output_path}/{label_chr}_tmp.p"
         if overwrite or (not os.path.exists(outFile_chr)):
             treeSeqFile_chr = treeSeqFile_all + '_chr' + str(chrN)
             if not os.path.exists(treeSeqFile_chr):
-                if task == 'sim_calc':
-                    print('simulation starts ...')
-                    trees = msprime.sim_ancestry(samples=sampleSizeByPopDict_,
-                                                 sequence_length=args['chrLength'],
-                                                 recombination_rate=args['recombination_rate'],
-                                                 demography=demography,
-                                                 ploidy=ploidy_sim,
-                                                 record_migrations=record_migrations
-                                                 )
-                    trees = msprime.sim_mutations(trees, rate=args['mutation_rate'], discrete_genome=False)
-                    trees.dump(treeSeqFile_chr)
-                else:  # chunks
-                    trees = tskit.load(treeSeqFile_all)
-                    chunks = []
-                    steps = [i for i in range(0, chrLength_all + 1, args['chrLength'])]
-                    for chunk_start, chunk_end in zip(steps[:-1], steps[1:]):
-                        chunks.append([chunk_start, chunk_end])
-                    chunk = chunks[chrN - 1]
-                    simplify = False if record_migrations else True
-                    trees = trees.keep_intervals(np.array([chunk]), simplify=simplify)
-                    # todo: the interval of the last tree in the subset tree sequence is not correct,
-                    #  for example, after applying chunk=[0,10000000] to the tree sequence with a interval=[0,50000000], the interval of the last tree
-                    #  in the subset tree sequence is [10000000, 50000000], but it should be not larger than 10000000.
-                    #  Therefore, it is better to drop the last tree in the subset tree sequence.
-                    trees.dump(treeSeqFile_chr)
+                trees = tskit.load(treeSeqFile_all)
+                chunks = []
+                steps = [i for i in range(0, chrLength_all + 1, args['chrLength'])]
+                for chunk_start, chunk_end in zip(steps[:-1], steps[1:]):
+                    chunks.append([chunk_start, chunk_end])
+                chunk = chunks[chrN - 1]
+                simplify = False if record_migrations else True
+                trees = trees.keep_intervals(np.array([chunk]), simplify=simplify)
+                # todo: the interval of the last tree in the subset tree sequence is not correct,
+                #  for example, after applying chunk=[0,10000000] to the tree sequence with a interval=[0,50000000], the interval of the last tree
+                #  in the subset tree sequence is [10000000, 50000000], but it should be not larger than 10000000.
+                #  Therefore, it is better to drop the last tree in the subset tree sequence.
+                trees.dump(treeSeqFile_chr)
             else:
                 print('loading existing tree sequence ...')
                 trees = tskit.load(treeSeqFile_chr)
@@ -1464,69 +1351,62 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
                                   genotypes_ref_file=genotypes_ref_file
                                   )
 
+            # if ARGname != 'trueARG':
+            # specify the directory for running ARG method and the file to save trees
+            ARGmethod = ARGname.rstrip('ARG')
+            ARGmethod_path = f"{schemePath}/{ARGmethod}_input_output"
+            hapMat, positions, positionIDs = None, None, None
+            genotypes_query_file_ = genotypes_query_file
+            treesFile = f"{ARGmethod_path}/{label_chr}.{ARGmethod}.trees"
+            if ARGname == 'relateARG':  # just do not want to re-run relate
+                treesFile = f"{ARGmethod_path}/relateOut_{label_chr}.trees"
 
-            if ARGname != 'trueARG':
-                # specify the directory for running ARG method and the file to save trees
-                ARGmethod = ARGname.rstrip('ARG')
-                ARGmethod_path = f"{schemePath}/{ARGmethod}_input_output"
-                hapMat, positions, positionIDs = None, None, None
-                genotypes_query_file_ = genotypes_query_file
-                treesFile = f"{ARGmethod_path}/{label_chr}.{ARGmethod}.trees"
-                if ARGname == 'relateARG':  # just do not want to re-run relate
-                    treesFile = f"{ARGmethod_path}/relateOut_{label_chr}.trees"
+            # run ARG method and get trees
+            if not os.path.exists(treesFile):
+                os.makedirs(ARGmethod_path, exist_ok=True)
+                if ARGname == 'relateARG':
+                    run_relate_wrapper(relate_input_output_path=ARGmethod_path,
+                                       recombRate=args['recombination_rate'],
+                                       Ne=args['Ne'],
+                                       mutRate=args['mutation_rate'],
+                                       fileName=label_chr,
+                                       treesFile=treesFile,
+                                       vcfFile=genotypes_query_file_,
+                                       positions=positions,
+                                       )
+            # trees = tskit.load(treesFile)
+            output_path = f"{method_output_path}/{label_chr}"
+            os.makedirs(output_path, exist_ok=True)
 
-                # run ARG method and get trees
-                if not os.path.exists(treesFile):
-                    os.makedirs(ARGmethod_path, exist_ok=True)
-                    if ARGname == 'relateARG':
-                        run_relate_wrapper(relate_input_output_path=ARGmethod_path,
-                                           recombRate=args['recombination_rate'],
-                                           Ne=args['Ne'],
-                                           mutRate=args['mutation_rate'],
-                                           fileName=label_chr,
-                                           treesFile=treesFile,
-                                           vcfFile=genotypes_query_file_,
-                                           hapMat=hapMat,
-                                           positions=positions,
-                                           positionIDs=positionIDs,
-                                           flipGenoByAncestor=False
-                                           )
-                trees = tskit.load(treesFile)
+            # prepare leaf ids and genetic map
+            samples, positions = read_samples_positions(genotypes_query_file_, read_samples=True, read_positions=True)
+            leaf_ids_file = f"{output_path}/leaf_ids.txt"
+            genetic_map_file = f"{output_path}/genetic_map.txt"
+            recombRate = args['recombination_rate']
+            pos_map_pairs = calc_genetic_map_for_sim_data(positions, recombRate)
+            with open(genetic_map_file, "w") as fw:
+                fw.write("pos COMBINED_rate Genetic_Map\n")
+                for pos, map in pos_map_pairs:
+                    string = str(pos) + " " + str(recombRate) + " "
+                    string = string + str(map) + "\n"
+                    fw.write(string)
 
-            # prepare ancestral specific samples
-            # tgtAnc_id = anc_id_by_name_dict[args['tgtAnc']] if len(anc_id_by_name_dict) > 0 else None
-            # asSamplesByTreesList = get_as_samples(trees, local_anc_calls=local_anc_calls,
-            #                                       tgtAnc_id=tgtAnc_id,
-            #                                       samples=querySamples)
-            #
-            # # run as-egrm or egrm
-            # samplesNum = len(querySamples) if sampleAnc else None
-            # # asSamplesByTreesList, sft = asSamplesByTreesList[1:], True
-            # sft = True
-            # Ks = run_methods(trees, method, asSamplesByTreesList, sft=sft, as_egrm_v=as_egrm_v,
-            #                  samplesNum=samplesNum,
-            #                  toBeMerged=toBeMerged)
-            # with open(outFile_chr, "wb") as f:
-            #     pickle.dump(Ks, f)
             cmd = 'asegrm compute '
-            cmd += f' --input INPUT'
-            cmd += f' --output_path OUTPUT_PATH'
-            cmd += f' --trees TREES '
-            cmd += f' --treeSamples TREESAMPLES '
-            cmd += f' --local_ancetry LOCAL_ANCETRY '
-            cmd += f' --target-ancestry TARGET_ANCESTRY '
-            cmd += f' --genetic-map GENETIC_MAP '
+            cmd += f' --trees {treesFile}'
+            cmd += f' --leaf_ids {leaf_ids_file}'
+            cmd += f' --local_ancestry {rfmix_msp_file}'
+            cmd += f' --target_ancestry {tgtAnc}'
+            cmd += f' --genetic_map {genetic_map_file}'
+            cmd += f' --output_path {output_path}'
+            exeCmd(cmd)
 
     elif task == 'plot':
-        # pdb.set_trace()
         plotPath = f"{methodPath}/plot_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}"
-        # if plot4pub:
-        #     plotPath = f"{plotPath}/forPublication"
         os.makedirs(plotPath, exist_ok=True)
         separation_index_path = f'{plotPath}/separation_index'
         os.makedirs(separation_index_path, exist_ok=True)
-        with open(samplesFile_query, 'r') as f:
-            samples = eval(f.read())
+        # with open(samplesFile_query, 'r') as f:
+        #     samples = eval(f.read())
 
         # generate method result on multiple chromosomes
         methodResultFile = f"{methodPath}/{label}_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}.p"
@@ -1586,32 +1466,19 @@ def asegrm_egrm_on_sim_chrs(parallelType=None, task=None, taskIdx=None, returnAr
             true_labels = true_labels[maternals]
             K = 0.5 * (K[maternals, :][:, maternals] + K[maternals, :][:, paternals] + \
                        K[paternals, :][:, maternals] + K[paternals, :][:, paternals])
-
-        # pdb.set_trace()
-        if norm_grm:
-            # normalize K
-            K = (K - K.mean()) / K.std()
-        pcNum = 100
-        PCs = eigendecomposition_on_grm(K, num_dims=pcNum)
+        PCs = eigendecomposition_on_grm(K, num_dims=100)
         pcaFig = f'{plotPath}/pcaPlot'
         pcaFig += f'_{label}.png'
         methodLabel = f'{method}_tgtAnc-{tgtAnc}' if 'as-' in method else method
         pcaFigTitle = f'{simScheme}+{methodLabel}+PCA'
         umapFigPath = f'{plotPath}/{asegrm_pca}-umapPlot_{label}'
-        separation_index_file = ''
-        if 'as-egrm' in method:
-            separation_index_file = f'{separation_index_path}/{asegrm_pca}_{label}'
-        if method == 'egrm':
-            separation_index_file = f'{separation_index_path}/pca_{label}'
-        if norm_grm:
-            pcaFig = pcaFig.replace('.png', '_normedGRM.png')
-            umapFigPath += '_normedGRM'
         plot_pca_umap(PCs, true_labels, pcaFig, umapFigPath, pcaFigTitle=pcaFigTitle,
                       umapFigTitle=f'{pcaFigTitle}+UMAP', sampleRGBs=sampleRGBs, sampleShapes=sampleShapes,
-                      separation_index_file=separation_index_file, pca_on_dip=pca_on_dip, plot4pub=plot4pub)
+                      pca_on_dip=pca_on_dip, plot4pub=plot4pub)
 
 
 if __name__ == '__main__':
-    pass
-    # To generate the Figure 3C, Figure Sx , perform the following steps:
-    # 1. Run the following command:
+    if sys.argv[2] == 'calc':
+        PATH_TO_RELATE = sys.argv[4]  # '/project/jitang_1167/software/relate_v1.2.0_x86_64_static'
+        PATH_TO_RFMix = sys.argv[5]  # '/project/chia657_28/programs/rfmix/rfmix '
+    asegrm_on_sim(simScheme=sys.argv[1], task=sys.argv[2], taskIdx=int(sys.argv[3]))
