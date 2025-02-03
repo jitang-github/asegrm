@@ -1,0 +1,4 @@
+msprime==1.2.0
+matplotlib==3.8.1
+scipy==1.10.1
+umap-learn==0.5.4
