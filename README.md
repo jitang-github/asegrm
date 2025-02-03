@@ -1,6 +1,8 @@
 # as-eGRM 
 as-eGRM is a genealogy-based method to estimate the expected genetic relationship matrix within one ancestry in admixed populations.
 
+Please see our [manuscript](https://www.biorxiv.org/content/10.1101/2025.01.10.632475v1.full) for more details.
+
 ## Installation
 Firstly execute the following commands to use [conda](https://docs.conda.io/en/latest/) to create an environment for running asegrm
 ~~~~
