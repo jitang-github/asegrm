@@ -34,7 +34,7 @@ python simulation.py simScheme calc idx PATH_TO_RELATE PATH_TO_RFMix
 ```
 
 - *simScheme*: The same as the simulation step.
-- *idx*: Specify which chunk to run. When simScheme=, there are 9 scenarios with each split into 10 chunks. So the *idx* takes from 0 and 89. When simScheme=, there are 3 scenarios with each split into 10 chunks. So the *idx* takes from 0 and 29.
+- *idx*: Specify which chunk to run. When simScheme=twoAnc3x3GridDer3, there are 9 scenarios with each split into 10 chunks. So the *idx* takes from 0 and 89. When simScheme=gLikeFig6A-6, there are 3 scenarios with each split into 10 chunks. So the *idx* takes from 0 and 29.
 - *PATH_TO_RELATE*: Path to the directory of [Relate](https://myersgroup.github.io/relate/index.html).
 - *PATH_TO_RFMix*: Path to the binary executable file of [RFMix](https://github.com/slowkoni/rfmix).
 
