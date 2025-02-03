@@ -243,7 +243,7 @@ def run_rfmix(queryFile, refFile, sampleMapFile, recombMapFile, outFile, chrN, l
     os.makedirs(os.path.dirname(logFile), exist_ok=True)
 
     # cmd = '/project/jitang_1167/software/rfmix-master/rfmix '
-    cmd = PATH_TO_RFMix #'/project/chia657_28/programs/rfmix/rfmix '
+    cmd = PATH_TO_RFMix  # '/project/chia657_28/programs/rfmix/rfmix '
     cmd += ' -f ' + queryFile
     cmd += ' -r ' + refFile
     cmd += ' -m ' + sampleMapFile
@@ -435,14 +435,15 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
     inputType = 'vcf'
     if fileName is None:
         fileName = vcfFile.split('/')[-1].rstrip('.vcf').rstrip('.vcf.gz')
+    outFileName = f'{fileName}.relate'
 
     os.makedirs(relate_input_output_path, exist_ok=True)
     if treesFile is None:
-        treesFile = f"{relate_input_output_path}/relateOut_{fileName}.trees"
+        treesFile = f"{relate_input_output_path}/{outFileName}.trees"
     if not os.path.exists(treesFile):
-        print(f"generating relate trees for {fileName} ...", flush=True)
-        hapFile = f"{relate_input_output_path}/{fileName}.haps"
-        sampleFile = f"{relate_input_output_path}/{fileName}.sample"
+        print(f"generating relate trees for {outFileName} ...", flush=True)
+        hapFile = f"{relate_input_output_path}/{outFileName}.haps"
+        sampleFile = f"{relate_input_output_path}/{outFileName}.sample"
         if inputType == 'vcf':
             vcf2relateHap(hapFile, sampleFile, vcfFile.rstrip('.vcf').rstrip('.vcf.gz'))
             # confirm chromosome is integer, for example 1 instead of chr1
@@ -463,7 +464,7 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
         exeCmd(f'gzip -f {hapFile} > {hapFile}.gz && rm -f {hapFile}')
         hapFile = hapFile + '.gz'
         if recombMapFile is None:
-            recombMapFile = f"{relate_input_output_path}/{fileName}.relate.map"
+            recombMapFile = f"{relate_input_output_path}/{outFileName}.map"
             pos_map_pairs = calc_genetic_map_for_sim_data(positions, recombRate)
             with open(recombMapFile, "w") as fw:
                 fw.write("pos COMBINED_rate Genetic_Map\n")
@@ -472,14 +473,14 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
                     string = string + str(map) + "\n"
                     fw.write(string)
 
-        run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName=f'relateOut_{fileName}',
+        run_relate(hapFile, sampleFile, recombMapFile, Ne, mutRate, outFileName=f'{outFileName}',
                    RelateOutPath=relate_input_output_path, logFile=logFile, memory=memory)
         os.system(
             PATH_TO_RELATE + "/bin/RelateFileFormats --mode ConvertToTreeSequence "
             + "-i "
-            + f"{relate_input_output_path}/relateOut_{fileName}"
+            + f"{relate_input_output_path}/{outFileName}"
             + " -o "
-            + f"{relate_input_output_path}/relateOut_{fileName}"
+            + f"{re.sub('.trees', '', treesFile)}"
         )
     else:
         print('File exists: ' + treesFile)
@@ -488,203 +489,8 @@ def run_relate_wrapper(relate_input_output_path, Ne, mutRate, recombRate=None, r
     return trees_relate
 
 
-### tools
-def separation_index(true_labels, x, dmat=None):
-    if dmat is None:
-        dmat = distance_matrix(x, x)
-    omat = dmat.argsort(axis=1)
-
-    scores = []
-    for i in np.arange(true_labels.shape[0]):
-        fellows = np.where(true_labels == true_labels[i])[0]
-        neighbors = omat[i, : fellows.shape[0]]
-        intersects = np.intersect1d(neighbors, fellows)
-        score = intersects.shape[0] / fellows.shape[0]
-        scores.append(score)
-
-    scores = np.array(scores)
-    return scores
-
-
-def get_samples_by_pop(samplesFile=None, pops=None, sampleIDbyPopNameDict=None, diploid=False):
-    if not os.path.exists(samplesFile):
-        samples = []
-        for pop in pops:
-            sampleStart, sampleEnd = sampleIDbyPopNameDict[pop]
-            for sample in range(sampleStart, sampleEnd):
-                samples.append(sample)
-        if diploid:
-            samples_dip = []
-            for i in range(0, len(samples), 2):
-                samples_dip.append(int(samples[i] / 2))
-            samples = samples_dip
-        with open(samplesFile, 'w') as fw:
-            fw.write(str(samples))
-    else:
-        with open(samplesFile, 'r') as fr:
-            samples = eval(fr.read())
-    return samples
-
-
-def plot_pca_umap(PCs, true_labels, pcaFig, umapFigPath, pcaFigTitle, umapFigTitle, sampleRGBs, sampleShapes,
-                  pca_on_dip=False, plot4pub=False):
-    def Plot(outfig, components, figTitle=None, axisName=None, textBoxAnnot=None, sampleRGBs=None,
-             sampleShapes=None, edgeColors=None, markerSizes=30):
-        component1 = components[:, 0]
-        component2 = components[:, 1]
-        sampleSize = len(component1)
-
-        xLabel, yLabel = None, None
-        if axisName is not None:
-            xLabel, yLabel = axisName + '1', axisName + '2'
-
-        if sampleRGBs is None:
-            sampleRGBs = np.array([[30, 144, 255]] * sampleSize) / 255
-        if sampleShapes is None:
-            sampleShapes = ['o'] * sampleSize
-        if markerSizes is None:
-            markerSizes = [3] * sampleSize
-        if type(markerSizes) == int or type(markerSizes) == float:
-            markerSizes = [markerSizes] * sampleSize
-
-        # plot
-        plt.close()
-        # figsize = [6.4, 4.8]
-        figsize = [6, 4]
-        fig, ax = plt.subplots(dpi=500, figsize=figsize)
-        for i in range(sampleSize):
-            plt.scatter(x=component1[i], y=component2[i],
-                        c=sampleRGBs[i].reshape(1, 3),
-                        marker=sampleShapes[i], edgecolors=edgeColors, s=markerSizes[i])
-
-        if textBoxAnnot is not None:
-            props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-            ax.text(0.02, 0.98, textBoxAnnot, transform=ax.transAxes,
-                    fontsize=12, weight="bold",
-                    verticalalignment='top', bbox=props)
-        plt.legend('', frameon=False)
-        if xLabel:
-            plt.xlabel(xLabel)
-        if yLabel:
-            plt.ylabel(yLabel)
-        if figTitle:
-            plt.title(figTitle)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
-        print('Plotting to ' + outfig)
-        plt.savefig(outfig)
-        plt.close()
-
-    pcSI = round(separation_index(true_labels, PCs[:, :2]).mean(), 2)
-    textBoxAnnot = f'SI:{pcSI}'
-    if pca_on_dip:
-        pcaFig = re.sub('.png', '_dip.png', pcaFig)
-    axisName = 'PC'
-    if plot4pub:
-        axisName = None
-        pcaFigTitle = None
-    # for_ASHG_talk = True
-    # markerSizes = 3
-    # if for_ASHG_talk:
-    # pcaFig = re.sub('.png', '_ASHG.png', pcaFig)
-    edgeColors = 'black'
-    # alpha = 1.0
-    # markerSizes = 10
-    markerSizes = 30
-    Plot(pcaFig, axisName=axisName, components=PCs, sampleRGBs=sampleRGBs, sampleShapes=sampleShapes,
-         # explainedVars=exp_var_pca,
-         figTitle=pcaFigTitle, edgeColors=edgeColors, textBoxAnnot=textBoxAnnot, markerSizes=markerSizes)
-    os.makedirs(umapFigPath, exist_ok=True)
-    umapSIs = []
-    umap_metrics = ['euclidean']
-    umap_minDists = [0.1]
-    umap_neighbors = [15]
-    umap_pcNums = [20, 50]
-    for umap_PCnum in umap_pcNums:
-        # PCs = PCs[:, :umap_PCnum]
-        PCs_umap = PCs[:, :umap_PCnum]
-        for umap_metric in umap_metrics:
-            for umap_minDist in umap_minDists:
-                for umap_neighbor in umap_neighbors:
-                    figNameLabel = f'metric-{umap_metric}_neighbors{umap_neighbor}_pc{umap_PCnum}_minDist{umap_minDist}'
-                    umapFig = f'{umapFigPath}/{figNameLabel}.png'
-                    if pca_on_dip:
-                        umapFig = re.sub('.png', '_dip.png', umapFig)
-                    umapArray = umap.UMAP(  # random_state=1,
-                        n_components=3, min_dist=umap_minDist, metric=umap_metric,
-                        n_neighbors=umap_neighbor).fit_transform(PCs_umap)
-                    umapSI = round(separation_index(true_labels, umapArray[:, :2]).mean(), 2)
-                    umapSIs.append(umapSI)
-                    textBoxAnnot = f'SI:{umapSI}'
-                    axisName = 'UMAP'
-                    if plot4pub:
-                        umapFigTitle = None
-                        axisName = None
-                    Plot(umapFig, axisName=axisName, components=umapArray, sampleRGBs=sampleRGBs,
-                         sampleShapes=sampleShapes,
-                         figTitle=umapFigTitle, edgeColors=edgeColors, textBoxAnnot=textBoxAnnot,
-                         markerSizes=markerSizes)
-
-
-def calcOverLapLen(start_end_1, start_end_2):
-    start_1, end_1 = start_end_1
-    start_2, end_2 = start_end_2
-    list1 = list(range(start_1, end_1 + 1))
-    list2 = list(range(start_2, end_2 + 1))
-    return len(list(set(list1) & set(list2)))
-
-
-def get_as_samples(trees, local_anc_calls, tgtAnc_id=None, samples=None):
-    """
-    get ancestry specific samples(i.e. samples with targeted ancestry) for trees
-    Returns:
-        byTreesOrSites: list, ['byTrees'],  ['bySites'], or ['byTrees', 'bySites']
-        chrLength, totalSampleSize: int, required when bySites is in byTreesOrSites
-    """
-    if type(local_anc_calls) != dict:
-        trees_ = trees.trees()
-        asSamplesByTrees = []
-        for tree in trees_:
-            start, end = tree.interval.left, tree.interval.right
-            overlap_segments = []
-            markStart = False
-            for segIdx, v in enumerate(local_anc_calls):
-                segStart, segEnd = v[:2]
-                if segStart <= start < segEnd:
-                    markStart = True
-                if markStart:
-                    overlap_segments.append(segIdx)
-                    if end <= segEnd:
-                        break
-            if len(overlap_segments) == 1:
-                localAncBySampleOrderArray = local_anc_calls[overlap_segments[0]][2]
-            else:
-                overlapLen, localAncBySampleOrderArray = 0, []
-                for segIdx in overlap_segments:
-                    segStart, segEnd, localAncBySampleOrderArray_1 = local_anc_calls[segIdx]
-                    overlapLen_1 = calcOverLapLen((int(start), int(end)), (int(segStart), int(segEnd)))
-                    if overlapLen_1 > overlapLen:
-                        overlapLen = overlapLen_1
-                        localAncBySampleOrderArray = localAncBySampleOrderArray_1
-            asSamples = np.where(np.array(localAncBySampleOrderArray) == tgtAnc_id)[0].tolist()
-            asSamplesByTrees.append(asSamples)
-    else:
-        # df = get_admix_tracts_by_trees(trees, src_tgt_pop_ids=src_tgt_pairs)
-        df = local_anc_calls
-        # df_samples = df['node_sample'].unique()
-        asSamplesByTrees = []
-        trees_ = trees.trees()
-        treeIdx = -1
-        for tree in trees_:
-            treeIdx += 1
-            asSamples = sorted(list(df[df['tree_idx'] == treeIdx]['node_sample'].unique()))
-            asSamples = list(
-                set(asSamples) & set(samples))  # confirm all asSamples are from the samples we want to classify
-            asSamplesByTrees.append(asSamples)
-    return asSamplesByTrees
-
-
-### define demographic model
+# ======================================================================================================================
+# utils for demographic model
 def step_mig_mat_pairs(pops, n_rows, n_cols, symmetric):
     assert len(pops) == n_rows * n_cols
     pmat = np.array(pops).reshape(n_rows, n_cols)
@@ -1134,6 +940,229 @@ def schemesForSim(simScheme, sampleAnc, sample_size=None):
     return argsList
 
 
+def get_samples_by_pop(samplesFile=None, pops=None, sampleIDbyPopNameDict=None, diploid=False):
+    if not os.path.exists(samplesFile):
+        samples = []
+        for pop in pops:
+            sampleStart, sampleEnd = sampleIDbyPopNameDict[pop]
+            for sample in range(sampleStart, sampleEnd):
+                samples.append(sample)
+        if diploid:
+            samples_dip = []
+            for i in range(0, len(samples), 2):
+                samples_dip.append(int(samples[i] / 2))
+            samples = samples_dip
+        with open(samplesFile, 'w') as fw:
+            fw.write(str(samples))
+    else:
+        with open(samplesFile, 'r') as fr:
+            samples = eval(fr.read())
+    return samples
+
+
+# ======================================================================================================================
+# plotting utils
+def CalcAncProp(simScheme, chrLen, samples, local_anc_calls, anc_id_by_name_dict=None):
+    print('CalcAncProp ...')
+    ancPropBySampleDict = {}
+    if type(local_anc_calls) != dict:
+        if 'twoAnc' in simScheme:
+            lens_from_a1 = np.zeros(len(samples))
+            a1_id = anc_id_by_name_dict['a1']
+            for start, end, anc in local_anc_calls:
+                for i in np.where(np.array(anc) == a1_id)[0]:
+                    lens_from_a1[i] += end - start
+            for i in samples:
+                a1_prop = lens_from_a1[i] / chrLen
+                ancPropBySampleDict[i] = {'a1': a1_prop, 'a2': 1 - a1_prop}
+        if 'gLikeFig6A' in simScheme:
+            for i in samples:
+                ancPropBySampleDict[i] = {}
+            for p in ['afr', 'eur', 'pol']:
+                lens_from_p = np.zeros(len(samples))
+                p_id = anc_id_by_name_dict[p]
+                for start, end, anc in local_anc_calls:
+                    for i in np.where(np.array(anc) == p_id)[0]:
+                        lens_from_p[i] += end - start
+                for i in samples:
+                    ancPropBySampleDict[i].update({p: lens_from_p[i] / chrLen})
+    print('CalcAncProp done!')
+    return ancPropBySampleDict
+
+
+def average_anc_props(ancPropBySampleDict_list, samples, ancPops):
+    ancPropBySampleDict = {}
+    for i in samples:
+        ancPropBySampleDict[i] = {}
+    for p in ancPops:
+        for i in samples:
+            ancPropBySampleDict[i].update({p: 0})
+        for ancPropBySampleDict_i in ancPropBySampleDict_list:
+            for i in samples:
+                ancPropBySampleDict[i][p] += ancPropBySampleDict_i[i][p]
+        for i in samples:
+            ancPropBySampleDict[i][p] /= len(ancPropBySampleDict_list)
+    return ancPropBySampleDict
+
+
+def separation_index(true_labels, x, dmat=None):
+    if dmat is None:
+        dmat = distance_matrix(x, x)
+    omat = dmat.argsort(axis=1)
+
+    scores = []
+    for i in np.arange(true_labels.shape[0]):
+        fellows = np.where(true_labels == true_labels[i])[0]
+        neighbors = omat[i, : fellows.shape[0]]
+        intersects = np.intersect1d(neighbors, fellows)
+        score = intersects.shape[0] / fellows.shape[0]
+        scores.append(score)
+
+    scores = np.array(scores)
+    return scores
+
+
+def colorSampleByPop(pops, sampleSizeByPopDict):
+    colors = [[228, 26, 28],
+              [55, 126, 184],
+              [77, 175, 74],
+              [152, 78, 163],
+              [255, 127, 0],
+              [255, 255, 51],
+              [166, 86, 40],
+              [247, 129, 191],
+              [153, 153, 153]]
+    assert len(pops) <= len(colors)
+    sampleRGBs = []
+    for pop, color in zip(pops, colors):
+        sampleRGBs += [color] * sampleSizeByPopDict[pop]
+    sampleRGBs = np.array(sampleRGBs) / 255
+    return sampleRGBs
+
+
+def colorSampleByAncProp(ancPropBySampleDict, samples, colorLabel):
+    sampleRGBs = []
+    for sample in samples:
+        if colorLabel == 'gLikeFig6A':
+            sampleRGBs.append([ancPropBySampleDict[sample]['pol'], ancPropBySampleDict[sample]['afr'],
+                               ancPropBySampleDict[sample]['eur']])
+    sampleRGBs = np.array(sampleRGBs)
+    return sampleRGBs
+
+
+def defineSampleShape(pops, sampleSizeByPopDict):
+    # letters = list(string.ascii_lowercase)# can not be colored
+    letters = ['o', 'v', '^', '<', '>',
+               '1', '2', '3', '4', '8',
+               's', 'p', 'P', '*', 'h',
+               'H', '+', 'x', 'X', 'D',
+               'd', '|', '_', '$...$', 'o']
+    assert len(pops) <= len(letters)
+    sampleShapes = []
+    for i, pop in enumerate(pops):
+        # sampleShapes += [f'${i}$'] * sampleSizeByPopDict[pop] # hard to tell 1 and 2 and 12 # can not be colored
+        # sampleShapes += [f'${letters[i]}$'] * sampleSizeByPopDict[pop] # can not be colored
+        sampleShapes += [f'{letters[i]}'] * sampleSizeByPopDict[pop]
+    return sampleShapes
+
+
+def plot_pca_umap(PCs, true_labels, pcaFig, umapFigPath, pcaFigTitle, umapFigTitle, sampleRGBs, sampleShapes,
+                  pca_on_dip=False, plot4pub=False):
+    def Plot(outfig, components, figTitle=None, axisName=None, textBoxAnnot=None, sampleRGBs=None,
+             sampleShapes=None, edgeColors=None, markerSizes=30, no_axis_label=False):
+        component1 = components[:, 0]
+        component2 = components[:, 1]
+        sampleSize = len(component1)
+
+        xLabel, yLabel = None, None
+        if axisName is not None:
+            xLabel, yLabel = axisName + '1', axisName + '2'
+
+        if sampleRGBs is None:
+            sampleRGBs = np.array([[30, 144, 255]] * sampleSize) / 255
+        if sampleShapes is None:
+            sampleShapes = ['o'] * sampleSize
+        if markerSizes is None:
+            markerSizes = [3] * sampleSize
+        if type(markerSizes) == int or type(markerSizes) == float:
+            markerSizes = [markerSizes] * sampleSize
+
+        # plot
+        plt.close()
+        # figsize = [6.4, 4.8]
+        figsize = [6, 4]
+        fig, ax = plt.subplots(dpi=500, figsize=figsize)
+        for i in range(sampleSize):
+            plt.scatter(x=component1[i], y=component2[i],
+                        c=sampleRGBs[i].reshape(1, 3),
+                        marker=sampleShapes[i], edgecolors=edgeColors, s=markerSizes[i])
+
+        if textBoxAnnot is not None:
+            props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            ax.text(0.02, 0.98, textBoxAnnot, transform=ax.transAxes,
+                    fontsize=12, weight="bold",
+                    verticalalignment='top', bbox=props)
+        if no_axis_label:
+            ax.set_xticks([])
+            ax.set_yticks([])
+        plt.legend('', frameon=False)
+        if xLabel:
+            plt.xlabel(xLabel)
+        if yLabel:
+            plt.ylabel(yLabel)
+        if figTitle:
+            plt.title(figTitle)
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
+        print('Plotting to ' + outfig)
+        plt.savefig(outfig)
+        plt.close()
+
+    pcSI = round(separation_index(true_labels, PCs[:, :2]).mean(), 2)
+    textBoxAnnot = f'SI:{pcSI}'
+    if pca_on_dip:
+        pcaFig = re.sub('.png', '_dip.png', pcaFig)
+    axisName = 'PC'
+    if plot4pub:
+        axisName = None
+        pcaFigTitle = None
+    edgeColors = None
+    markerSizes = 30
+    Plot(pcaFig, axisName=axisName, components=PCs, sampleRGBs=sampleRGBs, sampleShapes=sampleShapes,
+         # explainedVars=exp_var_pca,
+         figTitle=pcaFigTitle, edgeColors=edgeColors, textBoxAnnot=textBoxAnnot, markerSizes=markerSizes)
+    os.makedirs(umapFigPath, exist_ok=True)
+    umapSIs = []
+    umap_metrics = ['euclidean']
+    umap_minDists = [0.1]
+    umap_neighbors = [15]
+    umap_pcNums = [20, 50]
+    for umap_PCnum in umap_pcNums:
+        # PCs = PCs[:, :umap_PCnum]
+        PCs_umap = PCs[:, :umap_PCnum]
+        for umap_metric in umap_metrics:
+            for umap_minDist in umap_minDists:
+                for umap_neighbor in umap_neighbors:
+                    figNameLabel = f'metric-{umap_metric}_neighbors{umap_neighbor}_pc{umap_PCnum}_minDist{umap_minDist}'
+                    umapFig = f'{umapFigPath}/{figNameLabel}.png'
+                    if pca_on_dip:
+                        umapFig = re.sub('.png', '_dip.png', umapFig)
+                    umapArray = umap.UMAP(  # random_state=1,
+                        n_components=3, min_dist=umap_minDist, metric=umap_metric,
+                        n_neighbors=umap_neighbor).fit_transform(PCs_umap)
+                    umapSI = round(separation_index(true_labels, umapArray[:, :2]).mean(), 2)
+                    umapSIs.append(umapSI)
+                    textBoxAnnot = f'SI:{umapSI}'
+                    axisName = 'UMAP'
+                    if plot4pub:
+                        umapFigTitle = None
+                        axisName = None
+                    Plot(umapFig, axisName=axisName, components=umapArray, sampleRGBs=sampleRGBs,
+                         sampleShapes=sampleShapes,
+                         figTitle=umapFigTitle, edgeColors=edgeColors, textBoxAnnot=textBoxAnnot,
+                         markerSizes=markerSizes, no_axis_label=True)
+
+
 ### simulation
 def asegrm_on_sim(simScheme, task, taskIdx):
     assert task in ['sim', 'calc', 'plot']
@@ -1147,7 +1176,6 @@ def asegrm_on_sim(simScheme, task, taskIdx):
     plot4pub = True
 
     methodName = 'as-eGRM'
-    pub_fig2 = True
 
     chrNums = list(range(1, 11))
     chrNums_plot = list(range(1, 11))
@@ -1179,7 +1207,7 @@ def asegrm_on_sim(simScheme, task, taskIdx):
     # pdb.set_trace()
 
     args.update({'simScheme': simScheme})
-    schemePath = f'./simulation/{simScheme}'
+    schemePath = f'{os.getcwd()}/simulation/{simScheme}'
     os.makedirs(schemePath, exist_ok=True)
 
     args['schemePath'] = schemePath
@@ -1202,11 +1230,6 @@ def asegrm_on_sim(simScheme, task, taskIdx):
     else:
         colorBy = 'ancProp'
 
-    if ARGname == 'trueARG':
-        obssForARG = False
-    if LACname == 'trueLAC':
-        obssForLAC = False
-
     true_labels = []
     if 'twoAncTwoDer' in simScheme or 'gLikeFig6A' in simScheme:
         true_labels = np.repeat([0, 1], [args['sample_size'], args['sample_size']])
@@ -1217,8 +1240,6 @@ def asegrm_on_sim(simScheme, task, taskIdx):
 
     label = ''
     if 'gLikeFig6A' in simScheme:
-        # label = f"tSplit-{args['t_split']}_tAdmix{args['t_admix']}_lmr{args['latino_migration_rate']}_" \
-        #         f"d2AncProp{args['d2_anc_prop'][0]}-{args['d2_anc_prop'][1]}"
         label = f"tSplit-{args['t_split']}_tAdmix{args['t_admix']}_lm{args['latino_migration_rate']}-{args['latino_migration_stop_t']}_" \
                 f"d1AncProp{args['d1_anc_prop'][0]}-{args['d1_anc_prop'][1]}_d2AncProp{args['d2_anc_prop'][0]}-{args['d2_anc_prop'][1]}"
     else:
@@ -1235,6 +1256,9 @@ def asegrm_on_sim(simScheme, task, taskIdx):
     genotypesPath = f'{schemePath}/genotypes'
     os.makedirs(genotypesPath, exist_ok=True)
     rfmix_input_output_path = f"{args['schemePath']}/rfmix_input_output"
+    anc_prop_path = f"{schemePath}/anc_prop_{LACname}"
+    os.makedirs(anc_prop_path, exist_ok=True)
+    anc_prop_file_forPlot = f"{anc_prop_path}/{label}_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}.p"
 
     samplesFile_query = f'{schemePath}/samples_query.txt'
     samplesFile_ref = f'{schemePath}/samples_ref.txt'
@@ -1258,6 +1282,9 @@ def asegrm_on_sim(simScheme, task, taskIdx):
     if ploidy_sim == 2:
         sampleSizeByPopDict_ = args['sampleSizeByPopDict_dip']
 
+    method_output_path_label = f"{method_output_path}/{label}"
+    os.makedirs(method_output_path_label, exist_ok=True)
+
     # generate samples
     querySamples = get_samples_by_pop(samplesFile_query, args['rfmix_query_pops'], sampleIDbyPopNameDict,
                                       diploid=False)
@@ -1274,7 +1301,6 @@ def asegrm_on_sim(simScheme, task, taskIdx):
             if start <= i < end:
                 popNameBySampleDict[i] = popName
                 break
-
     if task == 'sim':
         if not os.path.exists(treeSeqFile_all):
             print('simulation starts ...')
@@ -1290,98 +1316,119 @@ def asegrm_on_sim(simScheme, task, taskIdx):
 
     elif task in ['calc']:
         label_chr = f'{label}_chr{chrN}'
-        outFile_chr = f"{method_output_path}/{label_chr}.p"
-        if overwrite or (not os.path.exists(outFile_chr)):
-            treeSeqFile_chr = treeSeqFile_all + '_chr' + str(chrN)
-            if not os.path.exists(treeSeqFile_chr):
-                trees = tskit.load(treeSeqFile_all)
-                chunks = []
-                steps = [i for i in range(0, chrLength_all + 1, args['chrLength'])]
-                for chunk_start, chunk_end in zip(steps[:-1], steps[1:]):
-                    chunks.append([chunk_start, chunk_end])
-                chunk = chunks[chrN - 1]
-                simplify = False if record_migrations else True
-                trees = trees.keep_intervals(np.array([chunk]), simplify=simplify)
-                # todo: the interval of the last tree in the subset tree sequence is not correct,
-                #  for example, after applying chunk=[0,10000000] to the tree sequence with a interval=[0,50000000], the interval of the last tree
-                #  in the subset tree sequence is [10000000, 50000000], but it should be not larger than 10000000.
-                #  Therefore, it is better to drop the last tree in the subset tree sequence.
-                trees.dump(treeSeqFile_chr)
-            else:
-                print('loading existing tree sequence ...')
-                trees = tskit.load(treeSeqFile_chr)
+        treeSeqFile_chr = treeSeqFile_all + '_chr' + str(chrN)
+        if not os.path.exists(treeSeqFile_chr):
+            trees = tskit.load(treeSeqFile_all)
+            chunks = []
+            steps = [i for i in range(0, chrLength_all + 1, args['chrLength'])]
+            for chunk_start, chunk_end in zip(steps[:-1], steps[1:]):
+                chunks.append([chunk_start, chunk_end])
+            chunk = chunks[chrN - 1]
+            simplify = False if record_migrations else True
+            trees = trees.keep_intervals(np.array([chunk]), simplify=simplify)
+            # todo: the interval of the last tree in the subset tree sequence is not correct,
+            #  for example, after applying chunk=[0,10000000] to the tree sequence with a interval=[0,50000000], the interval of the last tree
+            #  in the subset tree sequence is [10000000, 50000000], but it should be not larger than 10000000.
+            #  Therefore, it is better to drop the last tree in the subset tree sequence.
+            trees.dump(treeSeqFile_chr)
+        else:
+            print('loading existing tree sequence ...')
+            trees = tskit.load(treeSeqFile_chr)
 
-            # generate genotypes of vcf format
-            genotypes_query_file = f'{genotypesPath}/genotypes_query_{label_chr}.vcf.gz'
-            genotypes_ref_file = f'{genotypesPath}/genotypes_ref_{label_chr}.vcf.gz'
-            genotypes_all_file = f'{genotypesPath}/genotypes_all_{label_chr}.vcf.gz'
-            if LACname != 'trueLAC' or ARGname != 'trueARG':
-                if not os.path.exists(genotypes_all_file):
-                    with open(genotypes_all_file.rstrip('.gz'), 'w') as fw:
-                        trees.write_vcf(fw)
-                    exeCmd(f"bgzip {genotypes_all_file.rstrip('.gz')}")
-                    # sorting positions and removing duplicated postions are also necessary for the following sub-setting
-                    sort_positions(genotypes_all_file)
-                    rm_dup_positions(genotypes_all_file)
-                if not os.path.exists(genotypes_query_file):
-                    querySamples_ = querySamples_dip if ploidy_sim == 2 else querySamples
-                    querySamples_ = [f'tsk_{i}' for i in querySamples_]
-                    subset_by_samples(genotypes_all_file, genotypes_query_file, querySamples_, rm_mono=True)
-                if not os.path.exists(genotypes_ref_file):
-                    refSamples_ = refSamples_dip if ploidy_sim == 2 else refSamples
-                    refSamples_ = [f'tsk_{i}' for i in refSamples_]
-                    subset_by_samples(genotypes_all_file, genotypes_ref_file, refSamples_, rm_mono=True)
+        # generate genotypes of vcf format
+        genotypes_query_file = f'{genotypesPath}/genotypes_query_{label_chr}.vcf.gz'
+        genotypes_ref_file = f'{genotypesPath}/genotypes_ref_{label_chr}.vcf.gz'
+        genotypes_all_file = f'{genotypesPath}/genotypes_all_{label_chr}.vcf.gz'
+        if LACname != 'trueLAC' or ARGname != 'trueARG':
+            if not os.path.exists(genotypes_all_file):
+                with open(genotypes_all_file.rstrip('.gz'), 'w') as fw:
+                    trees.write_vcf(fw)
+                exeCmd(f"bgzip {genotypes_all_file.rstrip('.gz')}")
+                # sorting positions and removing duplicated postions are also necessary for the following sub-setting
+                sort_positions(genotypes_all_file)
+                rm_dup_positions(genotypes_all_file)
+            if not os.path.exists(genotypes_query_file):
+                querySamples_ = querySamples_dip if ploidy_sim == 2 else querySamples
+                querySamples_ = [f'tsk_{i}' for i in querySamples_]
+                subset_by_samples(genotypes_all_file, genotypes_query_file, querySamples_, rm_mono=True)
+            if not os.path.exists(genotypes_ref_file):
+                refSamples_ = refSamples_dip if ploidy_sim == 2 else refSamples
+                refSamples_ = [f'tsk_{i}' for i in refSamples_]
+                subset_by_samples(genotypes_all_file, genotypes_ref_file, refSamples_, rm_mono=True)
 
-            rfmix_msp_file = f"{rfmix_input_output_path}/rfmixOut_{label_chr}.msp.tsv"
-            if not os.path.exists(rfmix_msp_file):
-                sampleIDbyPopNameDict_ = copy.deepcopy(args['sampleIDbyPopNameDict'])
-                for pop in sampleIDbyPopNameDict_:
-                    sampleIDbyPopNameDict_[pop] = (
-                        int(sampleIDbyPopNameDict_[pop][0] / 2), int(sampleIDbyPopNameDict_[pop][1] / 2))
-                chrN_ = '1' if trees is not None else chrN
-                run_rfmix_wrapper(rfmix_input_output_path=rfmix_input_output_path,
-                                  query_pops=args['rfmix_query_pops'],
-                                  ref_pops=args['rfmix_ref_pops'],
-                                  sampleIDbyPopNameDict=sampleIDbyPopNameDict_,
-                                  trees=trees,
-                                  recombRate=args['recombination_rate'],
-                                  chrN=chrN_,
-                                  label=label_chr,
-                                  genotypes_query_file=genotypes_query_file,
-                                  genotypes_ref_file=genotypes_ref_file
-                                  )
+        # infer local ancestry calls
+        rfmix_msp_file = f"{rfmix_input_output_path}/rfmixOut_{label_chr}.msp.tsv"
+        if not os.path.exists(rfmix_msp_file):
+            sampleIDbyPopNameDict_ = copy.deepcopy(args['sampleIDbyPopNameDict'])
+            for pop in sampleIDbyPopNameDict_:
+                sampleIDbyPopNameDict_[pop] = (
+                    int(sampleIDbyPopNameDict_[pop][0] / 2), int(sampleIDbyPopNameDict_[pop][1] / 2))
+            chrN_ = '1' if trees is not None else chrN
+            run_rfmix_wrapper(rfmix_input_output_path=rfmix_input_output_path,
+                              query_pops=args['rfmix_query_pops'],
+                              ref_pops=args['rfmix_ref_pops'],
+                              sampleIDbyPopNameDict=sampleIDbyPopNameDict_,
+                              trees=trees,
+                              recombRate=args['recombination_rate'],
+                              chrN=chrN_,
+                              label=label_chr,
+                              genotypes_query_file=genotypes_query_file,
+                              genotypes_ref_file=genotypes_ref_file
+                              )
 
-            # if ARGname != 'trueARG':
-            # specify the directory for running ARG method and the file to save trees
-            ARGmethod = ARGname.rstrip('ARG')
-            ARGmethod_path = f"{schemePath}/{ARGmethod}_input_output"
-            hapMat, positions, positionIDs = None, None, None
-            genotypes_query_file_ = genotypes_query_file
-            treesFile = f"{ARGmethod_path}/{label_chr}.{ARGmethod}.trees"
-            if ARGname == 'relateARG':  # just do not want to re-run relate
-                treesFile = f"{ARGmethod_path}/relateOut_{label_chr}.trees"
+        # compute ancestry proportions
+        ancPropsFile = f"{anc_prop_path}/{label_chr}.p"
+        if not os.path.exists(ancPropsFile):
+            local_anc_calls, anc_id_by_name_dict = [], {}
+            with open(rfmix_msp_file, 'r') as fr:
+                rows = fr.readlines()
+                for i in re.sub('#Subpopulation order/codes: ', '', rows[0].rstrip('\n')).split('\t'):
+                    anc_name, anc_id = i.split('=')
+                    anc_id_by_name_dict[anc_name] = int(anc_id)
+                for row in rows[2:]:
+                    cols = row.rstrip('\n').split('\t')
+                    segStart, segEnd = cols[1:3]
+                    segStart, segEnd = int(segStart), int(segEnd)
+                    localAncBySampleOrderArray = [int(i) for i in cols[6:]]
+                    local_anc_calls.append([segStart, segEnd, localAncBySampleOrderArray])
+            local_anc_calls.sort(key=lambda x: x[0], reverse=False)
+            ancPropBySampleDict = CalcAncProp(simScheme, args['chrLength'], samples=querySamples,
+                                              local_anc_calls=local_anc_calls,
+                                              anc_id_by_name_dict=anc_id_by_name_dict
+                                              )
+            with open(ancPropsFile, 'wb') as fw:
+                pickle.dump(ancPropBySampleDict, fw)
 
-            # run ARG method and get trees
-            if not os.path.exists(treesFile):
-                os.makedirs(ARGmethod_path, exist_ok=True)
-                if ARGname == 'relateARG':
-                    run_relate_wrapper(relate_input_output_path=ARGmethod_path,
-                                       recombRate=args['recombination_rate'],
-                                       Ne=args['Ne'],
-                                       mutRate=args['mutation_rate'],
-                                       fileName=label_chr,
-                                       treesFile=treesFile,
-                                       vcfFile=genotypes_query_file_,
-                                       positions=positions,
-                                       )
-            # trees = tskit.load(treesFile)
-            output_path = f"{method_output_path}/{label_chr}"
-            os.makedirs(output_path, exist_ok=True)
+        # run ARG method
+        # if ARGname != 'trueARG':
+        # specify the directory for running ARG method and the file to save trees
+        ARGmethod = ARGname.rstrip('ARG')
+        ARGmethod_path = f"{schemePath}/{ARGmethod}_input_output"
+        hapMat, positions, positionIDs = None, None, None
+        genotypes_query_file_ = genotypes_query_file
+        treesFile = f"{ARGmethod_path}/{label_chr}.{ARGmethod}.trees"
+        # treesFile = f"{ARGmethod_path}/relateOut_{label_chr}.trees" # tmp
+        if not os.path.exists(treesFile):
+            os.makedirs(ARGmethod_path, exist_ok=True)
+            if ARGname == 'relateARG':
+                run_relate_wrapper(relate_input_output_path=ARGmethod_path,
+                                   recombRate=args['recombination_rate'],
+                                   Ne=args['Ne'],
+                                   mutRate=args['mutation_rate'],
+                                   fileName=label_chr,
+                                   treesFile=treesFile,
+                                   vcfFile=genotypes_query_file_,
+                                   positions=positions,
+                                   )
 
+        # run asegrm
+        asegrm_file = f'{method_output_path_label}/{label_chr}.trees.{tgtAnc}.asegrm.npy'
+        asegrm_mu_file = f'{method_output_path_label}/{label_chr}.trees.{tgtAnc}.asegrm.mu.npy'
+        if not os.path.exists(asegrm_file) and not os.path.exists(asegrm_mu_file):
             # prepare leaf ids and genetic map
             samples, positions = read_samples_positions(genotypes_query_file_, read_samples=True, read_positions=True)
-            leaf_ids_file = f"{output_path}/leaf_ids.txt"
-            genetic_map_file = f"{output_path}/genetic_map.txt"
+            leaf_ids_file = f"{method_output_path_label}/leaf_ids_chr{chrN}.txt"
+            genetic_map_file = f"{method_output_path_label}/genetic_map_chr{chrN}.txt"
             recombRate = args['recombination_rate']
             pos_map_pairs = calc_genetic_map_for_sim_data(positions, recombRate)
             with open(genetic_map_file, "w") as fw:
@@ -1390,6 +1437,12 @@ def asegrm_on_sim(simScheme, task, taskIdx):
                     string = str(pos) + " " + str(recombRate) + " "
                     string = string + str(map) + "\n"
                     fw.write(string)
+            with open(leaf_ids_file, 'w') as fw:
+                content = []
+                for i in samples:
+                    content.append(f'{i}.0')
+                    content.append(f'{i}.1')
+                fw.write('\n'.join(content))
 
             cmd = 'asegrm compute '
             cmd += f' --trees {treesFile}'
@@ -1397,75 +1450,57 @@ def asegrm_on_sim(simScheme, task, taskIdx):
             cmd += f' --local_ancestry {rfmix_msp_file}'
             cmd += f' --target_ancestry {tgtAnc}'
             cmd += f' --genetic_map {genetic_map_file}'
-            cmd += f' --output_path {output_path}'
+            cmd += f' --output_path {method_output_path_label}'
             exeCmd(cmd)
 
     elif task == 'plot':
         plotPath = f"{methodPath}/plot_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}"
         os.makedirs(plotPath, exist_ok=True)
-        separation_index_path = f'{plotPath}/separation_index'
-        os.makedirs(separation_index_path, exist_ok=True)
-        # with open(samplesFile_query, 'r') as f:
-        #     samples = eval(f.read())
+        with open(samplesFile_query, 'r') as f:
+            samples = eval(f.read())
+
+        # generate ancestry proportions on multiple chromosomes
+        ancPropBySampleDict_chrs = {}
+        if colorBy == 'ancProp':
+            if overwrite or (not os.path.exists(anc_prop_file_forPlot)):
+                ancPropBySampleDict_chrs = []
+                for chrN in chrNums_plot:
+                    ancPropsFile = f"{anc_prop_path}/{label}_chr{chrN}.p"
+                    with open(ancPropsFile, "rb") as f:
+                        ancPropBySampleDict_chrs.append(pickle.load(f))
+                ancPropBySampleDict_chrs = average_anc_props(ancPropBySampleDict_chrs, samples, ancPops)
+                with open(anc_prop_file_forPlot, "wb") as f:
+                    pickle.dump(ancPropBySampleDict_chrs, f)
+            else:
+                with open(anc_prop_file_forPlot, "rb") as f:
+                    ancPropBySampleDict_chrs = pickle.load(f)
 
         # generate method result on multiple chromosomes
-        methodResultFile = f"{methodPath}/{label}_chr{chrNums_plot[0]}-chr{chrNums_plot[-1]}.p"
-        if overwrite or (not os.path.exists(methodResultFile)):
-            asegrm_or_egrm, mu = 0, 0
-            for chrN in chrNums_plot:
-                outFile_chr = f"{method_output_path}/{label}_chr{chrN}.p"
-                with open(outFile_chr, "rb") as f:
-                    Ks_dip = pickle.load(f)
-                if method == 'egrm':
-                    asegrm_or_egrm += Ks_dip['asegrm_or_egrm'] * Ks_dip[
-                        'EK_mu']  # todo: re-plot the performance of egrm with this change
-                else:
-                    asegrm_or_egrm += Ks_dip['asegrm_or_egrm']
-                mu += Ks_dip['EK_mu']
-            if 'as-egrm' in method:
-                mu += 1e-13
-            asegrm_or_egrm /= mu
-            if 'as-egrm-c-new' in method or 'delaySub' in method:
-                asegrm_or_egrm -= asegrm_or_egrm.mean(axis=0)
-                asegrm_or_egrm -= asegrm_or_egrm.mean(axis=1, keepdims=True)
-            Ks_dip = {"asegrm_or_egrm": asegrm_or_egrm}
-            with open(methodResultFile, "wb") as f:
-                pickle.dump(Ks_dip, f)
+        if pca_on_dip:
+            methodResultFile = f"{method_output_path_label}/merged.{tgtAnc}.asegrm.diploid.npy"
         else:
-            with open(methodResultFile, "rb") as f:
-                Ks_dip = pickle.load(f)
+            methodResultFile = f"{method_output_path_label}/merged.{tgtAnc}.asegrm.haploid.npy"
+        if overwrite or (not os.path.exists(methodResultFile)):
+            cmd = f'asegrm merge {method_output_path_label}'
+            exeCmd(cmd)
+        K = np.load(methodResultFile)
 
         print('computing PCA-UMAP and plotting ...')
         # specify samplesShapes and sampleColors
         sampleShapes, sampleRGBs = [], []
-        for i, pop in enumerate(args['rfmix_query_pops']):
-            sampleShapes += ['o'] * args['sampleSizeByPopDict'][pop]
-        colors = [  # [228, 26, 28],
-            [55, 126, 184],
-            # [77, 175, 74],
-            # [152, 78, 163],
-            [255, 127, 0],
-            # [255, 255, 51],
-            # [166, 86, 40],
-            # [247, 129, 191],
-            # [153, 153, 153]
-        ]
-        pops, sampleSizeByPopDict = args['rfmix_query_pops'], args['sampleSizeByPopDict']
-        assert len(pops) <= len(colors)
-        sampleRGBs = []
-        for pop, color in zip(pops, colors):
-            sampleRGBs += [color] * sampleSizeByPopDict[pop]
-        sampleRGBs = np.array(sampleRGBs) / 255
+        if colorBy == 'ancProp':
+            sampleRGBs = colorSampleByAncProp(ancPropBySampleDict_chrs, samples, colorLabel)
+            sampleShapes = defineSampleShape(args['rfmix_query_pops'], args['sampleSizeByPopDict'])
+        if colorBy == 'pop':
+            for i, pop in enumerate(args['rfmix_query_pops']):
+                sampleShapes += ['o'] * args['sampleSizeByPopDict'][pop]
+            sampleRGBs = colorSampleByPop(args['rfmix_query_pops'], args['sampleSizeByPopDict'])
 
-        K = Ks_dip["asegrm_or_egrm"]
         if pca_on_dip:
             maternals = np.array(range(0, len(sampleRGBs), 2))
-            paternals = np.array(range(1, len(sampleRGBs), 2))
             sampleRGBs = sampleRGBs[maternals]
             sampleShapes = [sampleShapes[i] for i in maternals]
             true_labels = true_labels[maternals]
-            K = 0.5 * (K[maternals, :][:, maternals] + K[maternals, :][:, paternals] + \
-                       K[paternals, :][:, maternals] + K[paternals, :][:, paternals])
         PCs = eigendecomposition_on_grm(K, num_dims=100)
         pcaFig = f'{plotPath}/pcaPlot'
         pcaFig += f'_{label}.png'
