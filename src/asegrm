@@ -457,6 +457,12 @@ def asegrm(trees,
     egrm_all = mat_C_to_ndarray(egrm_C_all)
     mu_mat = mat_C_to_ndarray(mu_mat_C)
 
+    # The values indexed by the individuals with no any target segments are never updated by
+    # "the matrix.add_square(egrm_C, descendants, mu * g(p))" and "matrix.add(egrm_C_all, egrm_C)".
+    # They become nan after converting to numpy array, set them to zero
+    egrm_all[np.isnan(egrm_all)] = 0
+    mu_mat[np.isnan(mu_mat)] = 0
+
     pbar.close()
     return egrm_all, mu_mat
 
