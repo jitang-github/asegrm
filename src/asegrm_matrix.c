@@ -5,6 +5,8 @@
  * This program is licensed for academic research use only
  * unless otherwise stated. Contact jitang@usc.edu, charleston.chiang@med.usc.edu for
  * commercial licensing options.
+ * 
+ * For use in any publications please cite: Ji Tang, Charleston W.K. Chiang (2025). A genealogy-based approach for revealing ancestry-specific structures in admixed populations. The American Journal of Human Genetics, Volume 112, Issue 8, 1906 - 1922.
  *
  * Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Charleston W.K. Chiang)
 */
