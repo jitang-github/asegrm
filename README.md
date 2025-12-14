@@ -20,11 +20,19 @@ To enable running parallel jobs under diverse computation environments, the runn
 
 ### Running *compute* step
 ~~~
-asegrm compute [-h] --trees TREES --leaf_ids LEAF_IDS --local_ancestry LOCAL_ANCESTRY --target_ancestry TARGET_ANCESTRY --genetic_map GENETIC_MAP --output_path OUTPUT_PATH [--gp GP] [--left LEFT] [--right RIGHT] [--rlim RLIM] [--alim ALIM] [--verbose]
+asegrm compute [-h] --trees TREES --genetic_map GENETIC_MAP --output_path OUTPUT_PATH [--leaf_ids LEAF_IDS] [--local_ancestry LOCAL_ANCESTRY] [--target_ancestry TARGET_ANCESTRY] [--gp GP] [--left LEFT] [--right RIGHT] [--rlim RLIM] [--alim ALIM] [--verbose]
 ~~~
+
 
 #### Required arguments
 - --trees: Path to [tskit](https://tskit.dev/software/tskit.html) tree sequence file of one chr/chunk
+
+- --genetic_map: Path to the genetic map file, which is a (comma/space/tab separated) three-column file with the first column specifying the physical position in bp and the third column specifying the genetic position in cM. The first line will always be ignored as the header.
+
+- --output_path: Path to output directory
+
+#### Required arguments when estimating ancestry-specific GRMs
+NOTE: If the three parameters below are not provided, asegrm will estimate ancestry-unaware GRMs. It can be used to estimate GRMs in non-admixed populations or admixed populations but without taking ancestries into account. 
 
 - --leaf_ids: Path to the file of the IDs of the leaves on the trees. No header, one ID per line. Ensure the order of the IDs is the same as the leaves'. For some ARG-reconstruction software packages like [Relate](https://myersgroup.github.io/relate/index.html), [SINGER](https://github.com/popgenmethods/SINGER), [tsinfer-tsdate](https://github.com/tskit-dev/tsdate?tab=readme-ov-file), the order of the leaves on the output trees is the same as the order of the samples in the input VCF file. For these packages, you can read the sample IDs from the VCF, keep the same order, and append .0 and .1 to each sample ID (because each leaf represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry. 
 
@@ -32,20 +40,19 @@ asegrm compute [-h] --trees TREES --leaf_ids LEAF_IDS --local_ancestry LOCAL_ANC
 
 - --target_ancestry: Population name of the ancestry being targeted for investigation. All the leaves with other ancestries in the trees are masked when constructing ancestry-specific GRM. Ensure the name is included in the file indexed by the --local_ancestry.
 
-- --genetic_map: Path to the genetic map file, which is a (comma/space/tab separated) three-column file with the first column specifying the physical position in bp and the third column specifying the genetic position in cM. The first line will always be ignored as the header.
-
-- --output_path: Path to output directory
-
 #### Optional arguments
-
-- --gp: The function up-weighting recent branches. Currently provide two options: gp1 and gp2. Compared to gp1, gp2 up-weights recent branches more heavily, potentially being able to reveal more recent/finer structures.
+- --gp: Function for weighting the branches on the trees. Currently provide two options: gp1 and gp2. By default gp2 is used. gp1 equally weights the recent and ancient branches, while gp2 puts more weight on recent branches. As illustrated in [our paper](https://www.cell.com/ajhg/abstract/S0002-9297(25)00247-2), putting more weight on recent branches can better reveal more recent/finer structures. 
 
 - --rlim and --alim: Most recent time limit and most ancient time limit. Unit: generations. The two parameters are used to define a time window, only the part within the window of the trees is used when asegrm is constructing the GRM, potentially being able to reveal the structures that happened in the time window. See the section *Time-specific eGRM reveals dynamic relatedness through history* in [Fan et al., 2022](https://www.cell.com/ajhg/fulltext/S0002-9297(22)00112-4) for more info.
 
 - --left and --right: Leftmost genomic position and rightmost genomic position. Unit: bp. The two parameters are used to define a genomic interval, only the part within the interval of the trees is used when asegrm is constructing the GRM.
 
+#### asegrm vs egrm on estimating ancestry-unaware GRMs
+Both asegrm and [egrm](https://www.cell.com/ajhg/fulltext/S0002-9297(22)00112-4) can be used to estimate GRMs in non-admixed populations or admixed populations but without taking ancestries into account. The difference is that egrm equally weights recent and ancient branches on the trees while asegrm puts more weight on recent branches. As illustrated in [our paper](https://www.cell.com/ajhg/abstract/S0002-9297(25)00247-2), putting more weight on recent branches can better reveal recent population structures.
+
+
 #### Output
-Under the output directory, the files with the suffixs below are generated.
+If the three parameters *--leaf_ids*, *--local_ancetry*, and *--target_ancestry* are provided, under the output directory asegrm will output files with the following suffixs:
 
 - .trees.target_ancestry.asegrm.npy and .trees.target_ancestry.asegrm.mu.npy: Intermediate files used when running the *merge* step to generate the final ancestry-specific GRM.
 
@@ -54,6 +61,13 @@ Under the output directory, the files with the suffixs below are generated.
 - .trees.lac.npy: Ancestry info for the leaves in the trees. This file just needs to be generated once when running asegrm multiple times, each with a different target ancestry.
 
 - .trees.lac.skipped_trees: The trees with leaves spanning more than one ancestry are skipped when generating the .trees.lac.npy file and have no contribution to constructing ancestry-specific GRM. This file records the proportion of these trees. 
+
+Otherwise, asegrm will output files with the following suffixs:
+
+- .trees.asegrm.npy and .trees.asegrm.mu.npy: Intermediate files used when running the *merge* step to generate the final ancestry-unaware GRM.
+
+- .trees.asegrm.log: Log file
+
 
 
 ### Running *merge* step
@@ -64,13 +78,21 @@ asegrm merge [-h] output_path
 - output_path: The path indexed by the --output_path when running the *compute* step. 
 
 #### Output
-The following files are generated under the directory indexed by the --output_path.
+Under the output path, asegrm outputs:
 
-- merged.target_ancestry.asegrm.diploid.npy: The ancestry-specific GRM with diploid mode 
+(when estimating ancestry-specific GRMs)
+- merged.target_ancestry.asegrm.diploid.npy: The final ancestry-specific GRM in diploid mode 
 
-- merged.target_ancestry.asegrm.haploid.npy: The ancestry-specific GRM with haploid mode
+- merged.target_ancestry.asegrm.haploid.npy: The final ancestry-specific GRM in haploid mode
 
 - merged.target_ancestry.asegrm.log: Log file
+
+(when estimating ancestry-unware GRMs)
+- merged.asegrm.diploid.npy: The final ancestry-unaware GRM in diploid mode 
+
+- merged.asegrm.haploid.npy: The final ancestry-unaware GRM in haploid mode
+
+- merged.asegrm.log: Log file
 
 ### Example
 Check ./example/example.py for an example
