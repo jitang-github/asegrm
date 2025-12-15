@@ -10,7 +10,7 @@
  * 
  * For use in any publications please cite: Ji Tang, Charleston W.K. Chiang (2025). A genealogy-based approach for revealing ancestry-specific structures in admixed populations. The American Journal of Human Genetics, Volume 112, Issue 8, 1906 - 1922.
  *
- * Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Charleston W.K. Chiang)
+ * Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Nicholas Mancuso, Charleston W.K. Chiang)
 """
 import argparse
 import ast
@@ -512,13 +512,13 @@ class Gmap:
 
 # ======================================================================================================================
 ### as-egrm
-def asegrm(trees,
+def asegrm_partial(trees,
            asSamplesByTreesList,
            rlim=0, alim=math.inf,
            left=0, right=math.inf,
            gmap=Gmap(None),
            g=(lambda x: (1 - x) / x),
-           sft=False):
+           sft=False): # the output is incomplete until running the merge() function to finish the normalizations (including the division and the mean centering)
     num_samples = trees.num_samples
     num_trees = trees.num_trees
     egrm_C_all = matrix.new_matrix(num_samples)
@@ -600,24 +600,52 @@ def asegrm(trees,
     return egrm_all, mu_mat
 
 
-def merge(dataPath):
-    files = glob.glob(f'{dataPath}/*.asegrm.npy')
-    files_by_tgt_dict = {}
-    for i in files:
-        tgt = i.split('.')[-3]
-        if tgt not in files_by_tgt_dict:
-            files_by_tgt_dict[tgt] = []
-        files_by_tgt_dict[tgt].append(i)
-    for tgt, files in files_by_tgt_dict.items():
-        outFile_h = f'{dataPath}/merged.{tgt}.asegrm.haploid.npy'
-        outFile_d = f'{dataPath}/merged.{tgt}.asegrm.diploid.npy'
-        logFile = f'{dataPath}/merged.{tgt}.asegrm.log'
+def egrm_partial(trees, log = None, 
+             rlim = 0, alim = math.inf, 
+             left = 0, right = math.inf, 
+             gmap = Gmap(None), g = (lambda x: 1/(x*(1-x))), 
+             sft = True): # the output is incomplete until running the merge() function to finish the normalizations (including the division and the mean centering)
+    N = trees.num_samples
+    egrm_C = matrix.new_matrix(N)
+    
+    total_mu = 0
+    pbar = tqdm(total = trees.num_trees, 
+                   bar_format = '{l_bar}{bar:30}{r_bar}{bar:-30b}',
+                   miniters = trees.num_trees // 100,
+                   file = log)
+  
+    trees_ = trees.trees()
+    if sft: next(trees_)
+  
+    for tree in trees_:
+        pbar.update(1)
+        l = - gmap(max(left, tree.interval[0])) + gmap(min(right, tree.interval[1]))
+        if l <= 0: continue
+        if tree.total_branch_length == 0: continue
+        
+        for c in tree.nodes():
+            descendants = list(tree.samples(c))
+            n = len(descendants)
+            if(n == 0 or n == N): continue
+            t = max(0, min(alim, tree.time(tree.parent(c))) - max(rlim, tree.time(c)))
+            mu = l * t * 1e-8
+            p = float(n/N)
+            matrix.add_square(egrm_C, descendants, mu * g(p))
+            total_mu += mu
+  
+    egrm = mat_C_to_ndarray(egrm_C)
+    pbar.close()
+    return egrm, total_mu
+
+
+def merge(dataPath, ancestry_specific=True):
+    def merge_():
         log = get_logger(__name__, f"{logFile}")
         log.setLevel(logging.INFO)
         log.info('Begining merging')
         if os.path.exists(outFile_h) and os.path.exists(outFile_d):
             log.info(f'{outFile_d} and {outFile_h} already exist. To recompute, delete the files.')
-            continue
+            return
         log.info(
             f'Found {len(files)} chrs/chunks for generating {os.path.basename(outFile_d)} and {os.path.basename(outFile_d)}')
         file_pairs = []
@@ -646,6 +674,26 @@ def merge(dataPath):
                         asegrm[paternals, :][:, maternals] + asegrm[paternals, :][:, paternals])
         np.save(outFile_d, asegrm)
         log.info('Merging DONE!')
+    
+    if ancestry_specific:
+        files = glob.glob(f'{dataPath}/*.asegrm.npy')
+        files_by_tgt_dict = {}
+        for i in files:
+            tgt = i.split('.')[-3]
+            if tgt not in files_by_tgt_dict:
+                files_by_tgt_dict[tgt] = []
+            files_by_tgt_dict[tgt].append(i)
+        for tgt, files in files_by_tgt_dict.items():
+            outFile_h = f'{dataPath}/merged.{tgt}.asegrm.haploid.npy'
+            outFile_d = f'{dataPath}/merged.{tgt}.asegrm.diploid.npy'
+            logFile = f'{dataPath}/merged.{tgt}.asegrm.log'
+            merge_()
+    else:
+        files = glob.glob(f'{dataPath}/*.egrm.npy')
+        outFile_h = f'{dataPath}/merged.egrm.haploid.npy'
+        outFile_d = f'{dataPath}/merged.egrm.diploid.npy'
+        logFile = f'{dataPath}/merged.egrm.log'
+        merge_()
 
 
 def run_asegrm(args, log):
@@ -661,20 +709,18 @@ def run_asegrm(args, log):
     # Check if ancestry-specific mode or ancestry-unaware mode
     ancestry_specific_mode = all([args.leaf_ids, args.local_ancestry, args.target_ancestry])
     
+    asSamplesByTreesList = []
     if ancestry_specific_mode:
         log.info("Running in ancestry-specific mode")
         # load local ancestry calls ordered by trees
         localAncByTrees = np.load(args.tree_lac_file)
-        asSamplesByTreesList = []
         for localAncByTree in localAncByTrees:
             asSamples = np.where(localAncByTree == args.target_ancestry_code)[0].tolist()
             asSamplesByTreesList.append(asSamples)
+        grm_partial = asegrm_partial
     else:
         log.info("Running in ancestry-unaware mode")
-        # Create asSamplesByTreesList with all samples for each tree
-        num_trees = trees.num_trees
-        num_samples = trees.num_samples
-        asSamplesByTreesList = [list(range(num_samples)) for _ in range(num_trees)]
+        grm_partial = egrm_partial
 
     # specify the weighting function
     try:
@@ -699,7 +745,7 @@ def run_asegrm(args, log):
     }
 
     log.info("Beginning as-eGRM estimation")
-    egrm, egrm_mu = asegrm(**params)
+    egrm, egrm_mu = grm_partial(**params)
     log.info("Finished as-eGRM estimation")
 
     # output/save as-eGRM
@@ -765,6 +811,7 @@ if __name__ == "__main__":
     parser1.add_argument("--verbose", default=False, action="store_true", help="verbose logging. Includes debug info.")
     parser2 = subparsers.add_parser('merge', help="Merge the outputs across chrs/chunks to generate the final output")
     parser2.add_argument('output_path', help='The path indexed by the --output_path when running the compute step')
+    parser2.add_argument('--ancestry_specific', default=True, help='Whether the merge is for ancestry-specific outputs, default True')
     if len(sys.argv) == 1:
         parser.parse_args(['--help'])
     else:
@@ -814,10 +861,10 @@ if __name__ == "__main__":
                     log.warning("Warning: For ancestry-specific GRM computation, all three parameters --leaf_ids, --local_ancestry, and --target_ancestry must be provided. "
                               "Since not all are provided, running in ancestry-unaware mode.")
                 
-                args.asegrm_file = f"{args.output_path}/{treeFileName}.asegrm"
+                args.asegrm_file = f"{args.output_path}/{treeFileName}.egrm"
             
             run_asegrm(args, log)
         elif sys.argv[1] == 'merge':
-            merge(args.output_path)
+            merge(args.output_path, args.ancestry_specific)
         else:
             parser.parse_args(['--help'])

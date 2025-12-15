@@ -19,6 +19,8 @@ To enable running parallel jobs under diverse computation environments, the runn
 *compute* and *merge*. Please first run the *compute* step for each chromosome/chunk with parallelization, then run the *merge* step to merge the output of the *compute* step to generate the final ancestry-specific GRM.
 
 ### Running *compute* step
+NOTE: The output is incomplete until running the merge() function to normalize it
+
 ~~~
 asegrm compute [-h] --trees TREES --genetic_map GENETIC_MAP --output_path OUTPUT_PATH [--leaf_ids LEAF_IDS] [--local_ancestry LOCAL_ANCESTRY] [--target_ancestry TARGET_ANCESTRY] [--gp GP] [--left LEFT] [--right RIGHT] [--rlim RLIM] [--alim ALIM] [--verbose]
 ~~~
@@ -64,10 +66,9 @@ If the three parameters *--leaf_ids*, *--local_ancetry*, and *--target_ancestry*
 
 Otherwise, asegrm will output files with the following suffixs:
 
-- .trees.asegrm.npy and .trees.asegrm.mu.npy: Intermediate files used when running the *merge* step to generate the final ancestry-unaware GRM.
+- .trees.egrm.npy and .trees.egrm.mu.npy: Intermediate files used when running the *merge* step to generate the final ancestry-unaware GRM.
 
-- .trees.asegrm.log: Log file
-
+- .trees.egrm.log: Log file
 
 
 ### Running *merge* step
@@ -76,6 +77,9 @@ asegrm merge [-h] output_path
 ~~~
 #### Required arguments
 - output_path: The path indexed by the --output_path when running the *compute* step. 
+
+#### Optional arguments
+- --ancestry_specific: Whether the merge is for ancestry-specific outputs, default True. Set to False when estimating ancestry-unaware GRMs.
 
 #### Output
 Under the output path, asegrm outputs:
@@ -88,14 +92,14 @@ Under the output path, asegrm outputs:
 - merged.target_ancestry.asegrm.log: Log file
 
 (when estimating ancestry-unware GRMs)
-- merged.asegrm.diploid.npy: The final ancestry-unaware GRM in diploid mode 
+- merged.egrm.diploid.npy: The final ancestry-unaware GRM in diploid mode 
 
-- merged.asegrm.haploid.npy: The final ancestry-unaware GRM in haploid mode
+- merged.egrm.haploid.npy: The final ancestry-unaware GRM in haploid mode
 
-- merged.asegrm.log: Log file
+- merged.egrm.log: Log file
 
 ### Example
-Check ./example/example.py for an example
+Check ./example/example.py for an example of the usage
 
 ## Support
 Any issues please contact Ji Tang (jitang@usc.edu)
