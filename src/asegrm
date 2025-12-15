@@ -13,9 +13,11 @@
  * Acknowledgement: A part of code is adapted from egrm (https://github.com/Ephraim-usc/egrm, Copyright (C) 2022 Caoqi Fan, Charleston W.K. Chiang)
 """
 import argparse
+import ast
 import glob
 import logging
 import math
+import operator
 import pdb
 import re
 import sys
@@ -30,6 +32,135 @@ import pandas as pd
 import tskit
 import asegrm_matrix as matrix
 from tqdm import tqdm
+
+
+def parse_weighting_function(gp_str, log):
+    """
+    Parse weighting function specification into callable function.
+    
+    Args:
+        gp_str: String specifying the weighting function - either predefined ('gp1', 'gp2', 'gp3')
+                or custom expression using variable 'x' (e.g., '1/(x*(1-x))', '(1-x)/x')
+        log: Logger instance for output
+        
+    Returns:
+        callable: Lambda function that takes x (proportion, 0 < x < 1) and returns weight
+    """
+    # Handle predefined functions for backward compatibility
+    if gp_str == 'gp1':
+        log.info("Using predefined weighting function 'gp1': 1/(x*(1-x))")
+        return lambda x: 1 / (x * (1 - x))
+    elif gp_str == 'gp2':
+        log.info("Using predefined weighting function 'gp2': (1-x)/x")
+        return lambda x: (1 - x) / x
+    elif gp_str == 'gp3':
+        log.info("Using predefined weighting function 'gp3': (1-x)/(x*x)")
+        return lambda x: (1 - x) / (x * x)
+    
+    # Parse custom expression
+    try:
+        # Safe mathematical operations allowed
+        allowed_names = {
+            'x': 'x',
+            'exp': 'exp',
+            'log': 'log', 
+            'sqrt': 'sqrt',
+            'abs': 'abs',
+            'pi': 'pi',
+            'e': 'e'
+        }
+        
+        allowed_ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos
+        }
+        
+        def safe_eval(node, variables):
+            if isinstance(node, ast.Expression):
+                return safe_eval(node.body, variables)
+            elif isinstance(node, ast.Constant):  # Numbers
+                return node.value
+            elif isinstance(node, ast.Name):  # Variables
+                if node.id in allowed_names:
+                    if node.id == 'x':
+                        return variables['x']
+                    elif node.id in ['pi', 'e']:
+                        return getattr(math, node.id)
+                    else:
+                        return getattr(math, node.id)
+                else:
+                    raise NameError(f"Variable '{node.id}' not allowed")
+            elif isinstance(node, ast.BinOp):  # Binary operations
+                if type(node.op) in allowed_ops:
+                    left = safe_eval(node.left, variables)
+                    right = safe_eval(node.right, variables)
+                    return allowed_ops[type(node.op)](left, right)
+                else:
+                    raise TypeError(f"Operation {type(node.op).__name__} not allowed")
+            elif isinstance(node, ast.UnaryOp):  # Unary operations
+                if type(node.op) in allowed_ops:
+                    operand = safe_eval(node.operand, variables)
+                    return allowed_ops[type(node.op)](operand)
+                else:
+                    raise TypeError(f"Operation {type(node.op).__name__} not allowed")
+            elif isinstance(node, ast.Call):  # Function calls
+                if isinstance(node.func, ast.Name) and node.func.id in allowed_names:
+                    func_name = node.func.id
+                    args = [safe_eval(arg, variables) for arg in node.args]
+                    if func_name == 'exp':
+                        return math.exp(args[0])
+                    elif func_name == 'log':
+                        return math.log(args[0])
+                    elif func_name == 'sqrt':
+                        return math.sqrt(args[0])
+                    elif func_name == 'abs':
+                        return abs(args[0])
+                    else:
+                        raise NameError(f"Function '{func_name}' not implemented")
+                else:
+                    raise NameError(f"Function call not allowed")
+            else:
+                raise TypeError(f"AST node type {type(node).__name__} not supported")
+        
+        # Parse the expression
+        tree = ast.parse(gp_str, mode='eval')
+        
+        # Create the lambda function
+        def custom_function(x):
+            if not (0 < x < 1):
+                raise ValueError(f"Proportion x must be between 0 and 1, got {x}")
+            try:
+                result = safe_eval(tree, {'x': x})
+                if not isinstance(result, (int, float)) or math.isnan(result) or math.isinf(result):
+                    raise ValueError(f"Function returned invalid value: {result}")
+                return result
+            except ZeroDivisionError:
+                raise ValueError(f"Division by zero in function at x={x}")
+            except (ValueError, OverflowError) as e:
+                raise ValueError(f"Mathematical error in function at x={x}: {e}")
+        
+        # Validate function with test values
+        test_values = [0.1, 0.5, 0.9]
+        for test_x in test_values:
+            try:
+                result = custom_function(test_x)
+                if result <= 0:
+                    raise ValueError(f"Function must return positive values, got {result} at x={test_x}")
+            except Exception as e:
+                raise ValueError(f"Function validation failed at x={test_x}: {e}")
+        
+        log.info(f"Using custom weighting function: '{gp_str}'")
+        return custom_function
+        
+    except SyntaxError as e:
+        raise ValueError(f"Invalid function syntax in '{gp_str}': {e}")
+    except Exception as e:
+        raise ValueError(f"Error parsing function '{gp_str}': {e}")
 
 
 # ======================================================================================================================
@@ -527,19 +658,31 @@ def run_asegrm(args, log):
     # log.info("Constructing genetic map")
     gmap = Gmap(args.genetic_map)
 
-    # load local ancestry calls ordered by trees
-    localAncByTrees = np.load(args.tree_lac_file)
-    asSamplesByTreesList = []
-    for localAncByTree in localAncByTrees:
-        asSamples = np.where(localAncByTree == args.target_ancestry_code)[0].tolist()
-        asSamplesByTreesList.append(asSamples)
+    # Check if ancestry-specific mode or ancestry-unaware mode
+    ancestry_specific_mode = all([args.leaf_ids, args.local_ancestry, args.target_ancestry])
+    
+    if ancestry_specific_mode:
+        log.info("Running in ancestry-specific mode")
+        # load local ancestry calls ordered by trees
+        localAncByTrees = np.load(args.tree_lac_file)
+        asSamplesByTreesList = []
+        for localAncByTree in localAncByTrees:
+            asSamples = np.where(localAncByTree == args.target_ancestry_code)[0].tolist()
+            asSamplesByTreesList.append(asSamples)
+    else:
+        log.info("Running in ancestry-unaware mode")
+        # Create asSamplesByTreesList with all samples for each tree
+        num_trees = trees.num_trees
+        num_samples = trees.num_samples
+        asSamplesByTreesList = [list(range(num_samples)) for _ in range(num_trees)]
 
     # specify the weighting function
-    gp = (lambda x: 1 / (x * (1 - x)))
-    if args.gp == 'gp1':
-        gp = (lambda x: (1 - x) / x)
-    if args.gp == 'gp2':
-        gp = (lambda x: (1 - x) / (x * x))
+    try:
+        gp = parse_weighting_function(args.gp, log)
+    except ValueError as e:
+        log.error(f"Invalid weighting function specification: {e}")
+        log.info("Falling back to default 'gp2' function: (1-x)/x")
+        gp = lambda x: (1 - x) / x
 
     # construct params dict
     params = {
@@ -574,7 +717,7 @@ if __name__ == "__main__":
     # required arguments
     parser1.add_argument("--trees", "--trees", type=str, required=True,
                          help="Path to ts-kit tree sequence file of one chr/chunk")
-    parser1.add_argument("--leaf_ids", "--ts", type=str, required=True,
+    parser1.add_argument("--leaf_ids", "--ts", type=str, required=False, default=None,
                          help="Path to the file of the IDs of the leaves on the trees. No header, one ID per line. "
                               "Ensure the order of the IDs is the same as the leaves'. "
                               "For some ARG-reconstruction software packages like Relate "
@@ -585,17 +728,20 @@ if __name__ == "__main__":
                               "the input VCF file. For these packages, you can read the sample IDs from the VCF, "
                               "keep the same order, and append .0 and .1 to each sample ID (because each leaf "
                               "represents a haplotype) to get the IDs. Ensure the order of the IDs is the same across "
-                              "chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry.")
-    parser1.add_argument("--local_ancestry", "--la", type=str, required=True,
+                              "chrs/chunks. Ensure the IDs are included in the file indexed by the --local_ancestry. "
+                              "Required for ancestry-specific GRM computation. If not provided, computes ancestry-unaware GRM.")
+    parser1.add_argument("--local_ancestry", "--la", type=str, required=False, default=None,
                          help="Local ancestry calls of the same chr as the tree sequence. "
                               "Currently support the .msp.tsv file from RFMix (https://github.com/slowkoni/rfmix) "
                               "and the .vcf.gz file from flare (https://github.com/browning-lab/flare). "
                               "When the tree sequence is a chunk on a chromosome, it can be the same whole chromosome "
-                              "as long as it covers the tree sequence region.")
-    parser1.add_argument("--target_ancestry", "--ta", type=str, required=True,
+                              "as long as it covers the tree sequence region. "
+                              "Required for ancestry-specific GRM computation. If not provided, computes ancestry-unaware GRM.")
+    parser1.add_argument("--target_ancestry", "--ta", type=str, required=False, default=None,
                          help="Population name of the ancestry being targeted for investigation. All other ancestries "
                               "are masked when as-egrm is running. The name should be included in the file indexed by "
-                              "the --local_ancestry.")
+                              "the --local_ancestry. "
+                              "Required for ancestry-specific GRM computation. If not provided, computes ancestry-unaware GRM.")
     parser1.add_argument("--genetic_map", "--map", type=str, required=True, default=None,
                          help="Path to the genetic map file, which is a (comma/space/tab separated) three-column file "
                               "with the first column specifying the physical position in bp and the third column "
@@ -604,7 +750,14 @@ if __name__ == "__main__":
     parser1.add_argument("--output_path", "--o", type=str, required=True, help="Path to output directory")
 
     # optional arguments
-    parser1.add_argument("--gp", "--gp", default='gp1', type=str, help="The function up-weighting recent branches")
+    parser1.add_argument("--gp", "--gp", default='gp2', type=str, 
+                         help="Function for Weighting branches. Predefined options: "
+                              "'gp1' = 1/(x*(1-x)) (equal weighting the recent and ancient), "
+                              "'gp2' = (1-x)/x (more weight on recent, default), "
+                              "'gp3' = (1-x)/(x*x) (even more weight on recent). "
+                              "Custom expressions: Use variable 'x' for the proportion of the haplotypes under a branch (0<x<1), "
+                              "e.g., '1/(x*(1-x))', '(1-x)/x', 'exp(-x)', 'sqrt(1-x)/x'. "
+                              "Supported functions: exp, log, sqrt, abs. Constants: pi, e.")
     parser1.add_argument("--left", "--l", type=int, default=0, help="leftmost genomic position to be included")
     parser1.add_argument("--right", "--r", type=int, default=math.inf, help="rightmost genomic position to be included")
     parser1.add_argument("--rlim", type=float, default=0, help="most recent time limit")
@@ -619,26 +772,50 @@ if __name__ == "__main__":
         args = parser.parse_args()
         if sys.argv[1] == 'compute':
             assert args.trees.endswith('.trees')
-            assert args.local_ancestry.endswith('.msp.tsv') or args.local_ancestry.endswith('.vcf.gz')
-            os.makedirs(args.output_path, exist_ok=True)
-            treeFileName = os.path.basename(args.trees)
-            tree_lac_file = f"{args.output_path}/{treeFileName}.lac.npy"
-            args.log_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}"
-            log = get_logger(__name__, f"{args.log_file}")
-            if args.verbose:
-                log.setLevel(logging.DEBUG)
+            
+            # Check if ancestry-specific mode
+            ancestry_specific_mode = all([args.leaf_ids, args.local_ancestry, args.target_ancestry])
+            
+            if ancestry_specific_mode:
+                # Validate ancestry files
+                assert args.local_ancestry.endswith('.msp.tsv') or args.local_ancestry.endswith('.vcf.gz')
+                
+                os.makedirs(args.output_path, exist_ok=True)
+                treeFileName = os.path.basename(args.trees)
+                tree_lac_file = f"{args.output_path}/{treeFileName}.lac.npy"
+                args.log_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}"
+                log = get_logger(__name__, f"{args.log_file}")
+                if args.verbose:
+                    log.setLevel(logging.DEBUG)
+                else:
+                    log.setLevel(logging.INFO)
+                args.tree_lac_file = tree_lac_file
+                if not os.path.exists(
+                        tree_lac_file):  # just need to prepare tree_lac_file once for running asegrm on multiple target ancestries
+                    log.info(f"Begining combining trees and local ancestry")
+                    combine_tree_and_local_anc(args.trees, args.leaf_ids, args.local_ancestry, tree_lac_file, log)
+                    log.info(f"Finished combining trees and local ancestry")
+                else:
+                    log.info(f"Found {tree_lac_file}. Skip combining trees and local ancestry.")
+                args.target_ancestry_code = pop_name_to_code(args.local_ancestry, args.target_ancestry)
+                args.asegrm_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}.asegrm"
             else:
-                log.setLevel(logging.INFO)
-            args.tree_lac_file = tree_lac_file
-            if not os.path.exists(
-                    tree_lac_file):  # just need to prepare tree_lac_file once for running asegrm on multiple target ancestries
-                log.info(f"Begining combining trees and local ancestry")
-                combine_tree_and_local_anc(args.trees, args.leaf_ids, args.local_ancestry, tree_lac_file, log)
-                log.info(f"Finished combining trees and local ancestry")
-            else:
-                log.info(f"Found {tree_lac_file}. Skip combining trees and local ancestry.")
-            args.target_ancestry_code = pop_name_to_code(args.local_ancestry, args.target_ancestry)
-            args.asegrm_file = f"{args.output_path}/{treeFileName}.{args.target_ancestry}.asegrm"
+                # Ancestry-unaware mode
+                os.makedirs(args.output_path, exist_ok=True)
+                treeFileName = os.path.basename(args.trees)
+                args.log_file = f"{args.output_path}/{treeFileName}"
+                log = get_logger(__name__, f"{args.log_file}")
+                if args.verbose:
+                    log.setLevel(logging.DEBUG)
+                else:
+                    log.setLevel(logging.INFO)
+                    
+                if any([args.leaf_ids, args.local_ancestry, args.target_ancestry]):
+                    log.warning("Warning: For ancestry-specific GRM computation, all three parameters --leaf_ids, --local_ancestry, and --target_ancestry must be provided. "
+                              "Since not all are provided, running in ancestry-unaware mode.")
+                
+                args.asegrm_file = f"{args.output_path}/{treeFileName}.asegrm"
+            
             run_asegrm(args, log)
         elif sys.argv[1] == 'merge':
             merge(args.output_path)
