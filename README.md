@@ -19,7 +19,7 @@ To enable running parallel jobs under diverse computation environments, the runn
 *compute* and *merge*. Please first run the *compute* step for each chromosome/chunk with parallelization, then run the *merge* step to merge the output of the *compute* step to generate the final ancestry-specific GRM.
 
 ### Running *compute* step
-NOTE: The output is incomplete until running the merge() function to normalize it
+NOTE: The output is incomplete until running the merge() function to normalize and perform Higham nearest-PSD correction to ensure positive definiteness. Thanks to [Dr. Muthukrishnan](https://eaaswarkhanth.com/) for providing the code of the Higham nearest-PSD correction.
 
 ~~~
 asegrm compute [-h] --trees TREES --genetic_map GENETIC_MAP --output_path OUTPUT_PATH [--leaf_ids LEAF_IDS] [--local_ancestry LOCAL_ANCESTRY] [--target_ancestry TARGET_ANCESTRY] [--gp GP] [--left LEFT] [--right RIGHT] [--rlim RLIM] [--alim ALIM] [--verbose]
