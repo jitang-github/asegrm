@@ -3,7 +3,7 @@ as-eGRM is a genealogy-based method to estimate the expected genetic relationshi
 
 This method is described in the paper: [Ji Tang, Charleston W.K. Chiang (2025). A genealogy-based approach for revealing ancestry-specific structures in admixed populations. The American Journal of Human Genetics, Volume 112, Issue 8, 1906 - 1922](https://www.cell.com/ajhg/abstract/S0002-9297(25)00247-2). Please cite it if you use our method.
 
-This project emerged from a problem we faced in a separated analysis, please check [the interview](https://www.ashg.org/ajhg/inside-ajhg-a-chat-with-ji-tang/) for this story (and the potential implications of as-eGRM on human genetics research) if interested.
+This project emerged from an empirical problem we were facing in a separate analysis, please check [the interview](https://www.ashg.org/ajhg/inside-ajhg-a-chat-with-ji-tang/) for this story (and the potential implications of as-eGRM on human genetics research) if interested.
 
 ## Installation
 Firstly execute the following commands to use [conda](https://docs.conda.io/en/latest/) to create an environment for running asegrm
